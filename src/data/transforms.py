@@ -25,7 +25,7 @@ def simple_transforms(sample, size=640, hflip_prob=0.5):
     im, boxes, labels = sample["image"], sample["boxes"], sample["labels"]
     im, r, left, top = letterbox(im, size)
     boxes = apply_boxes(boxes, r, left, top)
-    if np.random.rand() < hflip_prob and boxes.shape > 0:
+    if np.random.rand() < hflip_prob and boxes.size > 0:
         im = np.ascontiguousarray(np.fliplr(im))
         w = im.shape[1]
         x1 = boxes[:, 0].copy(); x2 = boxes[:, 2].copy()

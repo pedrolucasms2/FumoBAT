@@ -18,14 +18,15 @@ def iou_xyxy(a, b, eps=1e-7):
     union = area_a[:, None] + area_b - inter + eps
     return inter / union
 
-def build_dataloader(data_yaml, img_size=640, bs=8, workers=2):
+def build_dataloader(data_yaml, img_size=640, bs=8, workers=0):
+    use_cuda = torch.cuda.is_available()
     with open(data_yaml, "r") as f:
         cfg = yaml.safe_load(f)
     root = cfg.get("path", ".")
     train_set = YOLODataset(root, "train", img_size, transforms=simple_transforms, class_names=list(cfg.get("names", {}).values()))
     val_set = YOLODataset(root, "val", img_size, transforms=simple_transforms, class_names=list(cfg.get("names", {}).values()))
-    dl_tr = DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=workers, pin_memory=True, collate_fn=collate_fn)
-    dl_va = DataLoader(val_set, batch_size=bs, shuffle=False, num_workers=workers, pin_memory=True, collate_fn=collate_fn)
+    dl_tr = DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=workers, pin_memory=use_cuda, collate_fn=collate_fn)
+    dl_va = DataLoader(val_set, batch_size=bs, shuffle=False, num_workers=workers, pin_memory=use_cuda, collate_fn=collate_fn)
     nc = len(cfg.get("names", {}))
     return dl_tr, dl_va, nc
 
