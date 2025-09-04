@@ -1,0 +1,9 @@
+# configs/model.yaml
+channels: [64, 128, 256, 384]
+img_size: 640
+use_dysample: true
+use_frm: true
+loss_weights:
+  p2: 1.0
+  p3: 0.7
+  p4: 0.5
