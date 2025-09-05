@@ -1,3 +1,4 @@
+# Virtual environments
 fumobat/
 __pycache__/
 *.pyc
@@ -13,13 +14,63 @@ env/
 venv/
 ENV/
 .venv/
+
+# IDEs
 .idea/
 .vscode/
 .DS_Store
 *.iml
 *.swp
 *.swo
+
+# Jupyter
 .ipynb_checkpoints/
+
+# Training outputs and logs
 logs/
 runs/
+wandb/
+
+# Datasets and data files
 datasets/
+data/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# Model weights and checkpoints (except essential ones)
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+!weights_small_object_yolo.pt  # Keep the essential pretrained weights
+
+# Results and evaluation
+results/
+evaluation_results/
+*.json
+*.csv
+*.txt
+detection_result.jpg
+result.jpg
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Conda/pip
+*.egg
+*.wheel

@@ -1,0 +1,66 @@
+# Enhanced model configuration for small object detection
+channels: [64, 128, 256, 384]
+img_size: 640
+use_dysample: true
+use_frm: true
+
+# Enhanced loss weights for small objects
+loss_weights:
+  p1: 2.0    # Highest weight for very small objects (stride=2)
+  p2: 1.5    # High weight for small objects (stride=4)  
+  p3: 1.0    # Normal weight for medium objects (stride=8)
+  p4: 0.7    # Lower weight for large objects (stride=16)
+
+# Small object specific optimizations
+small_object_optimizations:
+  # Multi-scale training scales
+  training_scales: [480, 512, 544, 576, 608, 640, 672, 704, 736]
+  
+  # Enhanced anchors optimized for small objects
+  anchors:
+    P1: [[2, 3], [4, 5], [6, 8]]        # Very small (stride=2)
+    P2: [[8, 10], [12, 15], [16, 20]]   # Small (stride=4)
+    P3: [[20, 25], [30, 35], [40, 50]]  # Medium (stride=8) 
+    P4: [[50, 65], [80, 100], [120, 150]] # Large (stride=16)
+  
+  # Loss function hyperparameters
+  loss_config:
+    box_loss_weight: 0.05
+    obj_loss_weight: 1.0
+    cls_loss_weight: 0.3
+    focal_gamma: 2.0
+    small_object_weight: 3.0  # Extra weight for objects smaller than threshold
+    small_object_threshold: 0.1  # Objects with area < 0.1 are considered small
+    iou_type: "CIoU"  # Complete IoU for better localization
+    
+  # Data augmentation settings
+  augmentation:
+    mosaic_prob: 0.3
+    mixup_prob: 0.2
+    copy_paste_prob: 0.2
+    hsv_prob: 0.7
+    flip_prob: 0.5
+    rotation_limit: 15
+    scale_range: [0.8, 1.2]
+    
+  # Training optimizations
+  training:
+    warmup_epochs: 5
+    patience: 30  # Early stopping patience
+    min_delta: 0.001  # Minimum improvement for early stopping
+    gradient_clip: 10.0  # Gradient clipping for stability
+    
+# Feature enhancement settings  
+feature_enhancement:
+  use_feature_pyramid_attention: true
+  use_multi_scale_context: true
+  use_small_object_head: true
+  context_scales: [1, 2, 3, 5]  # Different receptive field scales
+
+# Model architecture tweaks
+architecture:
+  backbone_depth_multiplier: 1.0
+  neck_depth_multiplier: 1.0
+  head_depth_multiplier: 1.5  # Deeper heads for better small object detection
+  use_ghost_bottleneck: true
+  use_coordinate_attention: true

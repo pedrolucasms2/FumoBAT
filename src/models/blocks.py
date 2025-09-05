@@ -139,11 +139,28 @@ class DySample(nn.Module):
         return torch.cat(outs, 1)
 
 class FRM(nn.Module):
-    def __init__(self, c):
+    def __init__(self, c_up, c_skip):
         super().__init__()
-        self.g = nn.Sequential(nn.Conv2d(2*c, c, 1, bias=False), nn.SiLU(), nn.Conv2d(c, 1, 1))
+        # Primeiro, alinhe os canais se forem diferentes
+        self.align = nn.Conv2d(c_up, c_skip, 1, bias=False) if c_up != c_skip else nn.Identity()
+        
+        # Gate para combinar as features
+        self.g = nn.Sequential(
+            nn.Conv2d(c_skip * 2, c_skip, 1, bias=False),  # 2*c_skip -> c_skip
+            nn.SiLU(),
+            nn.Conv2d(c_skip, 1, 1)
+        )
+    
     def forward(self, up, skip):
+        # Redimensionar se necessário
         if up.shape[-2:] != skip.shape[-2:]:
             up = F.interpolate(up, size=skip.shape[-2:], mode='bilinear', align_corners=True)
-        w = torch.sigmoid(self.g(torch.cat([up, skip], 1)))
-        return w * up + (1 - w) * skip
+        
+        # Alinhar canais
+        up_aligned = self.align(up)
+        
+        # Gerar peso de combinação
+        delta = torch.sigmoid(self.g(torch.cat([up_aligned, skip], 1)))
+        
+        # Combinar features
+        return delta * skip + (1 - delta) * up_aligned
