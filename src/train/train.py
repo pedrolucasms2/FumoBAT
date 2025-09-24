@@ -354,7 +354,7 @@ if __name__ == "__main__":
     
     model = enhanced_train(
         data_yaml="configs/data.yaml",
-        model_yaml="/Users/pedrolucasmirandasouza/Documents/Projetos2025/FumoBAT/smallObjectYolo/configs/model.yaml",
+        model_yaml="configs/model.yaml",
         epochs=50,  # Reasonable number for testing
         batch_size=8,  # Stable batch size
         lr=5e-4,  # Conservative learning rate
