@@ -16,7 +16,7 @@ import numpy as np
 
 # Imports relativos corrigidos
 try:
-    from src.models.model import SmallObjectYOLO  # Use original model
+    from src.models.model import SmallObjectYOLO 
     from src.train.losses import SmallObjectLoss
     from src.data.dataset import YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
@@ -34,8 +34,6 @@ except ImportError:
     from src.data.transforms import SmallObjectAugmentationPipeline
 
 def create_anchors_for_small_objects():
-    """Create optimized anchors for small object detection"""
-    # Based on analysis of your dataset, these anchors are optimized for small objects
     anchors = {
         'P1': [[2, 3], [4, 5], [6, 8]],      # Very small objects (stride=2)
         'P2': [[8, 10], [12, 15], [16, 20]],  # Small objects (stride=4)
@@ -130,9 +128,6 @@ def build_enhanced_dataloader(data_yaml, img_size=640, batch_size=8, workers=4, 
     return dataloader, nc
 
 def calculate_metrics(outputs, targets, strides, conf_threshold=0.1, iou_threshold=0.5):
-    """Calculate precision, recall, and mAP for small objects"""
-    # This is a simplified metric calculation
-    # In practice, you'd want to use proper COCO evaluation
     
     device = outputs[0].device
     batch_size = outputs[0].shape[0]
@@ -152,7 +147,6 @@ def calculate_metrics(outputs, targets, strides, conf_threshold=0.1, iou_thresho
         valid_predictions = (obj_conf > conf_threshold).sum().item()
         total_predictions += valid_predictions
     
-    # Simple metrics calculation (replace with proper evaluation)
     precision = correct_predictions / (total_predictions + 1e-16)
     recall = correct_predictions / (total_targets + 1e-16)
     f1 = 2 * precision * recall / (precision + recall + 1e-16)
@@ -356,11 +350,7 @@ def enhanced_train(
 
 if __name__ == "__main__":
     # CONSOLIDATED TRAINING - SAME DIRECTORY, BETTER PARAMETERS
-    print("🚀 STARTING CONSOLIDATED TRAINING")
-    print("="*60)
-    print("⚠️  Using ORIGINAL model architecture to build on existing weights")
-    print("✅ Overwriting previous results in runs/improved_train")
-    print("="*60)
+    print("Starting training")
     
     model = enhanced_train(
         data_yaml="configs/data.yaml",
