@@ -26,30 +26,6 @@ ENV/
 # Jupyter
 .ipynb_checkpoints/
 
-# Training outputs and logs
-logs/
-runs/
-wandb/
-
-# Datasets and data files
-data/
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.tiff
-*.webp
-
-# Model weights and checkpoints (except essential ones)
-*.pt
-*.pth
-*.onnx
-*.pb
-*.h5
-!weights_small_object_yolo.pt  # Keep the essential pretrained weights
-
-
 # Temporary files
 tmp/
 temp/
