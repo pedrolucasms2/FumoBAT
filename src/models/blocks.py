@@ -164,3 +164,90 @@ class FRM(nn.Module):
         
         # Combinar features
         return delta * skip + (1 - delta) * up_aligned
+
+class ObjectRelationModule(nn.Module):
+    """
+    Object Relation Module for contextual reasoning, inspired by "Relation Networks for Object Detection".
+    """
+    def __init__(self, c_in, n_relations=16, d_k=64, d_g=64):
+        super().__init__()
+        self.n_relations = n_relations
+        self.d_k = d_k
+        self.d_g = d_g
+
+        # Projeções para Key, Query, Value (para a relação de aparência)
+        self.W_k = nn.Linear(c_in, d_k)
+        self.W_q = nn.Linear(c_in, d_k)
+        self.W_v = nn.Linear(c_in, c_in)
+
+        # Embedding para a característica geométrica
+        self.geo_embedding = nn.Sequential(
+            nn.Linear(4, d_g),
+            nn.ReLU(),
+            nn.Linear(d_g, d_g),
+            nn.ReLU()
+        )
+        
+        # Matriz de peso para a relação geométrica
+        self.W_g = nn.Linear(d_g, n_relations)
+
+    def forward(self, x):
+        """
+        x: feature map de entrada com shape [B, C, H, W]
+        """
+        B, C, H, W = x.shape
+        N = H * W  # Número de "objetos" (localizações na grade)
+
+        # 1. Gerar características de aparência e geométricas
+        features = x.permute(0, 2, 3, 1).contiguous().view(B, N, C)
+
+        # Gerar coordenadas para a característica geométrica
+        yy, xx = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
+        # Bbox simplificado: [x_center, y_center, width, height] - assumindo w=h=1 para cada célula
+        bboxes = torch.stack([xx.float(), yy.float(), torch.ones_like(xx), torch.ones_like(yy)], dim=-1).view(N, 4)
+
+        # 2. Calcular Relação Geométrica
+        # A formulação exata do artigo é para pares de bboxes, aqui adaptamos para a grade
+        # Para simplificar, calculamos a diferença de coordenadas entre todas as células
+        diff = bboxes.unsqueeze(0) - bboxes.unsqueeze(1) # Shape [N, N, 4]
+        
+        # log(|xm-xn|/wm), etc. - como wm=1, simplifica para log(|xm-xn|)
+        # Adicionamos um epsilon para evitar log(0)
+        geo_features = torch.log(torch.abs(diff) + 1e-8)
+        
+        # Embedding da característica geométrica
+        embedded_geo = self.geo_embedding(geo_features) # [N, N, d_g]
+        
+        # Peso geométrico com gating ReLU
+        # [N, N, d_g] -> [N, N, n_relations]
+        w_g = F.relu(self.W_g(embedded_geo))
+
+        # 3. Calcular Relação de Aparência
+        q = self.W_q(features)  # [B, N, d_k]
+        k = self.W_k(features)  # [B, N, d_k]
+        
+        # Produto escalar para obter a matriz de atenção de aparência
+        # [B, N, d_k] x [B, d_k, N] -> [B, N, N]
+        w_a = torch.bmm(q, k.transpose(1, 2)) / (self.d_k ** 0.5)
+        w_a = w_a.softmax(dim=2) # Normalização
+
+        # 4. Combinar Pesos e Augmentar Features
+        # w_g: [N, N, n_relations], w_a: [B, N, N]
+        # Para combinar, expandimos a dimensão do batch em w_g e a de relações em w_a
+        # Usamos uma média para simplificar a combinação dos pesos de relação
+        w_g_mean = w_g.mean(dim=2).unsqueeze(0) # [1, N, N]
+        
+        # Combinar: peso geométrico modula o peso de aparência
+        w_mn = w_a * w_g_mean # [B, N, N]
+
+        # 5. Augmentar a feature
+        v = self.W_v(features) # [B, N, C]
+        
+        # Agregar features de "valor" com base no peso combinado
+        relation_features = torch.bmm(w_mn, v) # [B, N, C]
+        
+        # Adicionar à feature original (conexão residual)
+        augmented_features = features + relation_features
+        
+        # Remodelar de volta para o formato de feature map
+        return augmented_features.view(B, H, W, C).permute(0, 3, 1, 2)

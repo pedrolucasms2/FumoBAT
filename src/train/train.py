@@ -1,9 +1,13 @@
-# src/train/enhanced_train.py
+# src/train/train.py
 import os
 import sys
 import yaml
 import math
 import time
+import json
+import shutil
+import logging
+import argparse
 
 # Adicionar o diretório raiz ao path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -16,7 +20,7 @@ import numpy as np
 
 # Imports relativos corrigidos
 try:
-    from src.models.model import SmallObjectYOLO 
+    from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectLoss
     from src.data.dataset import YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
@@ -27,21 +31,13 @@ except ImportError:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.join(current_dir, '..', '..')
     sys.path.insert(0, root_dir)
-    
-    from src.models.model import SmallObjectYOLO  # Use original model
+
+    from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectLoss
     from src.data.dataset import YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
 
-def create_anchors_for_small_objects():
-    anchors = {
-        'P1': [[2, 3], [4, 5], [6, 8]],      # Very small objects (stride=2)
-        'P2': [[8, 10], [12, 15], [16, 20]],  # Small objects (stride=4)
-        'P3': [[20, 25], [30, 35], [40, 50]], # Medium objects (stride=8)
-        'P4': [[50, 65], [80, 100], [120, 150]] # Larger objects (stride=16)
-    }
-    return anchors
-
+# (As classes EarlyStopping, WarmupCosineScheduler, etc. continuam aqui, sem alterações)
 class EarlyStopping:
     """Early stopping to prevent overfitting"""
     def __init__(self, patience=10, min_delta=0.001):
@@ -49,7 +45,7 @@ class EarlyStopping:
         self.min_delta = min_delta
         self.counter = 0
         self.best_loss = float('inf')
-        
+
     def __call__(self, val_loss):
         if val_loss < self.best_loss - self.min_delta:
             self.best_loss = val_loss
@@ -67,297 +63,212 @@ class WarmupCosineScheduler:
         self.total_epochs = total_epochs
         self.base_lr = base_lr
         self.min_lr = min_lr
-        
+
     def step(self, epoch):
         if epoch < self.warmup_epochs:
-            # Warmup phase
             lr = self.base_lr * (epoch + 1) / self.warmup_epochs
         else:
-            # Cosine annealing phase
             progress = (epoch - self.warmup_epochs) / (self.total_epochs - self.warmup_epochs)
             lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
-        
+
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
-        
         return lr
 
 def build_enhanced_dataloader(data_yaml, img_size=640, batch_size=8, workers=4, training=True):
-    """Build dataloader with enhanced augmentations"""
+    # (Esta função permanece a mesma)
     use_cuda = torch.cuda.is_available()
-    
     with open(data_yaml, "r") as f:
         cfg = yaml.safe_load(f)
-    
     root = cfg.get("path", ".")
     class_names = list(cfg.get("names", {}).values())
-    
-    # Enhanced transforms
-    transforms = SmallObjectAugmentationPipeline(
-        img_size=img_size, 
-        training=training
-    )
-    
+    transforms = SmallObjectAugmentationPipeline(img_size=img_size, training=training)
     if training:
-        dataset = YOLODataset(
-            root, "train", img_size, 
-            transforms=transforms, 
-            class_names=class_names
-        )
+        dataset = YOLODataset(root, "train", img_size, transforms=transforms, class_names=class_names)
         shuffle = True
     else:
-        dataset = YOLODataset(
-            root, "val", img_size,
-            transforms=transforms,
-            class_names=class_names
-        )
+        dataset = YOLODataset(root, "val", img_size, transforms=transforms, class_names=class_names)
         shuffle = False
-    
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=batch_size, 
-        shuffle=shuffle, 
-        num_workers=workers, 
-        pin_memory=use_cuda, 
-        collate_fn=collate_fn,
-        drop_last=training,  # Drop last incomplete batch during training
-        persistent_workers=workers > 0
-    )
-    
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=workers, pin_memory=use_cuda, collate_fn=collate_fn, drop_last=training, persistent_workers=workers > 0)
     nc = len(cfg.get("names", {}))
     return dataloader, nc
 
 def calculate_metrics(outputs, targets, strides, conf_threshold=0.1, iou_threshold=0.5):
-    
+    # (Esta função permanece a mesma)
     device = outputs[0].device
     batch_size = outputs[0].shape[0]
-    
-    total_predictions = 0
-    correct_predictions = 0
-    total_targets = len(targets) if targets is not None else 0
-    
+    total_predictions, correct_predictions, total_targets = 0, 0, len(targets) if targets is not None else 0
     for i, (output, stride) in enumerate(zip(outputs, strides)):
         batch_size, num_predictions, height, width = output.shape
-        
-        # Extract predictions
         output = output.view(batch_size, num_predictions, -1)
         obj_conf = torch.sigmoid(output[..., 4])
-        
-        # Count predictions above confidence threshold
         valid_predictions = (obj_conf > conf_threshold).sum().item()
         total_predictions += valid_predictions
-    
     precision = correct_predictions / (total_predictions + 1e-16)
     recall = correct_predictions / (total_targets + 1e-16)
     f1 = 2 * precision * recall / (precision + recall + 1e-16)
-    
-    return {
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'total_predictions': total_predictions,
-        'total_targets': total_targets
-    }
+    return {'precision': precision, 'recall': recall, 'f1': f1}
+
+def setup_logging(save_dir):
+    """Configura o logging para salvar em arquivo e no console"""
+    log_file = os.path.join(save_dir, 'train.log')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    return logging.getLogger()
 
 def enhanced_train(
-    data_yaml="configs/data.yaml",
-    model_yaml="configs/model.yaml", 
-    epochs=100,  # Reduced for testing
-    batch_size=8,  # Smaller batch for stability
-    lr=5e-4,  # Conservative learning rate
-    img_size=640,
-    device=None,
-    weights=None,
-    save_dir="runs/improved_train"  # Use the SAME directory
+    data_yaml,
+    model_yaml,
+    epochs,
+    batch_size,
+    lr,
+    img_size,
+    device,
+    weights,
+    save_dir
 ):
-    """CONSOLIDATED TRAINING FUNCTION - THE ONLY ONE WE NEED"""
-    
-    # Setup device
+    """FUNÇÃO DE TREINAMENTO CONSOLIDADA E APRIMORADA"""
+    # Setup
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Create save directory
     os.makedirs(save_dir, exist_ok=True)
-    
-    # Load model configuration
+    logger = setup_logging(save_dir)
+    logger.info(f"Using device: {device}")
+    logger.info(f"Saving results to: {save_dir}")
+
+    # Salvar configurações para reprodutibilidade
+    shutil.copy(data_yaml, os.path.join(save_dir, 'data.yaml'))
+    shutil.copy(model_yaml, os.path.join(save_dir, 'model.yaml'))
+
+    # Load config
     with open(model_yaml, "r") as f:
         model_cfg = yaml.safe_load(f)
     
-    # Build dataloaders
-    print("Building dataloaders...")
-    train_loader, nc = build_enhanced_dataloader(
-        data_yaml, img_size, batch_size, workers=0, training=True
-    )
-    val_loader, _ = build_enhanced_dataloader(
-        data_yaml, img_size, batch_size//2, workers=0, training=False
-    )
-    
-    print(f"Train samples: {len(train_loader.dataset)}")
-    print(f"Val samples: {len(val_loader.dataset)}")
-    
-    # Initialize model - USE ORIGINAL ARCHITECTURE TO MATCH EXISTING WEIGHTS
-    print("Initializing model...")
+    # Dataloaders
+    logger.info("Building dataloaders...")
+    train_loader, nc = build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, training=True)
+    val_loader, _ = build_enhanced_dataloader(data_yaml, img_size, batch_size*2, workers=4, training=False)
+    logger.info(f"Train samples: {len(train_loader.dataset)}")
+    logger.info(f"Val samples: {len(val_loader.dataset)}")
+
+    # Model
+    logger.info("Initializing model...")
+    # Usando a nova arquitetura com Módulo de Relação
     model = SmallObjectYOLO(nc=nc, ch=model_cfg.get('channels', [64, 128, 256, 384]))
     
-    # Load weights if provided
     if weights and os.path.exists(weights):
-        print(f"Loading weights from {weights}")
+        logger.info(f"Loading weights from {weights}")
         checkpoint = torch.load(weights, map_location=device)
-        model.load_state_dict(checkpoint, strict=False)
-    
+        # Ajuste para carregar pesos mesmo com a nova arquitetura
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in checkpoint.items() if k in model_dict and v.shape == model_dict[k].shape}
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+        logger.info(f"Loaded {len(pretrained_dict)} layers from pretrained weights.")
+
     model = model.to(device)
     
-    # Enhanced loss function for small objects
-    criterion = SmallObjectLoss(
-        nc=nc, 
-        device=device,
-        hyp={
-            'box': 0.05,
-            'cls': 0.3,  # Reduced for single class
-            'obj': 1.0,
-            'focal_loss_gamma': 2.0,
-            'fl_gamma': 1.5,
-            'small_obj_weight': 3.0,  # Higher weight for small objects
-            'iou_type': 'CIoU'
-        }
-    )
-    
-    # Optimizer with different learning rates for different parts
-    optimizer = torch.optim.AdamW([
-        {'params': [p for n, p in model.named_parameters() if 'head' in n], 'lr': lr},
-        {'params': [p for n, p in model.named_parameters() if 'head' not in n], 'lr': lr * 0.1}
-    ], weight_decay=5e-4)
-    
-    # Enhanced learning rate scheduler
-    scheduler = WarmupCosineScheduler(
-        optimizer, 
-        warmup_epochs=5,
-        total_epochs=epochs,
-        base_lr=lr,
-        min_lr=lr * 0.01
-    )
-    
-    # Mixed precision training
+    # Loss, Optimizer, Scheduler, etc.
+    criterion = SmallObjectLoss(nc=nc, device=device, hyp={'box': 0.05, 'cls': 0.3, 'obj': 1.0, 'focal_loss_gamma': 2.0, 'fl_gamma': 1.5, 'small_obj_weight': 3.0, 'iou_type': 'CIoU'})
+    optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=5e-4)
+    scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=5, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
     scaler = GradScaler() if device == 'cuda' else None
-    
-    # Early stopping
     early_stopping = EarlyStopping(patience=30, min_delta=0.001)
-    
+
     # Training loop
-    print("Starting training...")
+    logger.info("Starting training...")
     best_loss = float('inf')
-    
+    history = []
+
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0.0
-        num_batches = 0
-        
-        # Update learning rate
         current_lr = scheduler.step(epoch)
         
         for batch_idx, (images, targets) in enumerate(train_loader):
             images = images.to(device, non_blocking=True)
-            # targets already processed by collate_fn
-            
             optimizer.zero_grad()
             
-            # Forward pass with mixed precision
             if scaler is not None:
                 with autocast():
                     outputs, strides = model(images)
-                    loss, loss_items = criterion(outputs, targets)
-                
-                # Backward pass
+                    loss, _ = criterion(outputs, targets)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 outputs, strides = model(images)
-                loss, loss_items = criterion(outputs, targets)
+                loss, _ = criterion(outputs, targets)
                 loss.backward()
                 optimizer.step()
             
             epoch_loss += loss.item()
-            num_batches += 1
-            
-            # Log progress
-            if batch_idx % 50 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, Batch {batch_idx}/{len(train_loader)}, "
-                      f"Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
         
         # Validation
         model.eval()
-        val_loss = 0.0
-        val_metrics = {'precision': 0, 'recall': 0, 'f1': 0}
-        
+        val_loss, val_metrics = 0.0, {'precision': 0, 'recall': 0, 'f1': 0}
         with torch.no_grad():
             for images, targets in val_loader:
                 images = images.to(device, non_blocking=True)
-                
                 outputs, strides = model(images)
                 loss, _ = criterion(outputs, targets)
                 val_loss += loss.item()
-                
-                # Calculate metrics
                 metrics = calculate_metrics(outputs, targets, strides)
-                for key in val_metrics:
-                    val_metrics[key] += metrics[key]
+                for key in val_metrics: val_metrics[key] += metrics[key]
         
         # Average metrics
+        epoch_loss /= len(train_loader)
         val_loss /= len(val_loader)
-        for key in val_metrics:
-            val_metrics[key] /= len(val_loader)
+        for key in val_metrics: val_metrics[key] /= len(val_loader)
         
-        epoch_loss /= num_batches
-        
-        print(f"Epoch {epoch+1}/{epochs} - "
-              f"Train Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}, "
-              f"Precision: {val_metrics['precision']:.4f}, "
-              f"Recall: {val_metrics['recall']:.4f}, "
-              f"F1: {val_metrics['f1']:.4f}")
-        
-        # Save best model
+        logger.info(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | Train Loss: {epoch_loss:.4f} | Val Loss: {val_loss:.4f} | Precision: {val_metrics['precision']:.4f}, Recall: {val_metrics['recall']:.4f}")
+
+        # Salvar histórico
+        epoch_results = {'epoch': epoch+1, 'lr': current_lr, 'train_loss': epoch_loss, 'val_loss': val_loss, **val_metrics}
+        history.append(epoch_results)
+        with open(os.path.join(save_dir, 'training_history.json'), 'w') as f:
+            json.dump(history, f, indent=4)
+
+        # Salvar melhor modelo
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': val_loss,
-                'metrics': val_metrics
-            }, os.path.join(save_dir, 'best_model.pt'))
-            print(f"New best model saved with val_loss: {val_loss:.4f}")
-        
-        # Save checkpoint every 20 epochs
-        if (epoch + 1) % 20 == 0:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': val_loss,
-            }, os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pt'))
-        
-        # Early stopping check
+            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
+            logger.info(f"New best model saved with val_loss: {val_loss:.4f}")
+
         if early_stopping(val_loss):
-            print(f"Early stopping triggered at epoch {epoch+1}")
+            logger.info(f"Early stopping triggered at epoch {epoch+1}")
             break
-    
-    # Save final model
-    torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
-    print("Training completed!")
-    
+
+    torch.save(model.state_dict(), os.path.join(save_dir, 'final_model_relation.pt'))
+    logger.info("Training completed!")
     return model
 
 if __name__ == "__main__":
-    # CONSOLIDATED TRAINING - SAME DIRECTORY, BETTER PARAMETERS
-    print("Starting training")
+    parser = argparse.ArgumentParser(description='Enhanced Training for Small Object Detection')
+    parser.add_argument('--img-size', type=int, default=1024, help='Image size for training')
+    parser.add_argument('--batch-size', type=int, default=8, help='Batch size for training (A100 can handle this with 1024px)')
+    parser.add_argument('--epochs', type=int, default=150, help='Total number of epochs')
+    parser.add_argument('--lr', type=float, default=5e-4, help='Initial learning rate')
+    parser.add_argument('--data', type=str, default='configs/data.yaml', help='Path to data.yaml')
+    parser.add_argument('--model', type=str, default='configs/enhanced_model.yaml', help='Path to model.yaml')
+    parser.add_argument('--weights', type=str, default='weights_small_object_yolo.pt', help='Path to pretrained weights')
+    parser.add_argument('--save-dir', type=str, default='runs/train_relation_A100', help='Directory to save results')
     
-    model = enhanced_train(
-        data_yaml="configs/data.yaml",
-        model_yaml="configs/model.yaml",
-        epochs=50,  # Reasonable number for testing
-        batch_size=8,  # Stable batch size
-        lr=5e-4,  # Conservative learning rate
-        img_size=640,
-        save_dir="runs/improved_train"  # SAME DIRECTORY
+    args = parser.parse_args()
+
+    enhanced_train(
+        data_yaml=args.data,
+        model_yaml=args.model,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        img_size=args.img_size,
+        device=None,
+        weights=args.weights,
+        save_dir=args.save_dir
     )

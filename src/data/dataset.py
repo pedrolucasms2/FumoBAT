@@ -1,4 +1,3 @@
-# src/data/dataset.py
 import os
 import glob
 import torch
@@ -15,65 +14,77 @@ class YOLODataset(Dataset):
         self.transforms = transforms
         self.img_size = img_size
         self.class_names = class_names or []
-    def __len__(self): return len(self.paths)
+
+    def __len__(self):
+        return len(self.paths)
+
     def load_labels(self, path, w, h):
-        txt = os.path.join(self.lbl_dir, Path(path).stem + ".txt")
+        txt_path = os.path.join(self.lbl_dir, Path(path).stem + ".txt")
         boxes, labels = [], []
-        if os.path.isfile(txt):
-            with open(txt, "r") as f:
-                for ln, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    toks = line.split()
-                    if len(toks) < 5:
-                        # linha inválida, menos de 5 campos
-                        continue
-                    # use apenas os 5 primeiros campos (classe cx cy w h)
-                    t = toks[:5]
-                    try:
-                        c = int(float(t))
-                        xc, yc, bw, bh = map(float, t[1:5])
-                    except Exception:
-                        # formato inválido nesta linha
-                        continue
-                    # converter de xywh normalizado ([0,1]) para xyxy em pixels
-                    # se não estiver normalizado (valores > 1), assume que já está em pixels e usa direto
-                    if max(xc, yc, bw, bh) <= 1.0:
-                        x1 = (xc - bw / 2.0) * w
-                        y1 = (yc - bh / 2.0) * h
-                        x2 = (xc + bw / 2.0) * w
-                        y2 = (yc + bh / 2.0) * h
-                    else:
-                        # se vierem em pixels (cx,cy,w,h), converta do mesmo modo
-                        x1 = xc - bw / 2.0
-                        y1 = yc - bh / 2.0
-                        x2 = xc + bw / 2.0
-                        y2 = yc + bh / 2.0
-                    boxes.append([x1, y1, x2, y2])
-                    labels.append(c)
-        if len(boxes) == 0:
+        if os.path.isfile(txt_path):
+            with open(txt_path, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        try:
+                            # Formato YOLO: class_id, x_center, y_center, width, height
+                            c = int(parts[0])
+                            xc, yc, bw, bh = map(float, parts[1:5])
+                            
+                            # Converter de YOLO normalizado para [x1, y1, x2, y2] em pixels
+                            x1 = (xc - bw / 2) * w
+                            y1 = (yc - bh / 2) * h
+                            x2 = (xc + bw / 2) * w
+                            y2 = (yc + bh / 2) * h
+                            boxes.append([x1, y1, x2, y2])
+                            labels.append(c)
+                        except ValueError:
+                            continue # Ignora linhas mal formatadas
+        
+        # O formato para albumentations deve ser [x_min, y_min, x_max, y_max]
+        # e as labels precisam estar juntas
+        # Para YOLO, o formato é [x_center, y_center, width, height]
+        yolo_boxes = []
+        for box in boxes:
+            x1, y1, x2, y2 = box
+            xc = ((x1 + x2) / 2) / w
+            yc = ((y1 + y2) / 2) / h
+            box_w = (x2 - x1) / w
+            box_h = (y2 - y1) / h
+            yolo_boxes.append([xc, yc, box_w, box_h])
+
+        if not yolo_boxes:
             return np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.int64)
-        return np.array(boxes, dtype=np.float32), np.array(labels, dtype=np.int64)
+        
+        return np.array(yolo_boxes, dtype=np.float32), np.array(labels, dtype=np.int64)
+
     def __getitem__(self, i):
-        p = self.paths[i]
-        im = cv2.imread(p)
-        assert im is not None, f"Image not found: {p}"
-        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-        h0, w0 = im.shape[:2]
-        boxes, labels = self.load_labels(p, w0, h0)
-        sample = {"image": im, "boxes": boxes, "labels": labels}
+        path = self.paths[i]
+        image = cv2.imread(path)
+        assert image is not None, f"Image not found: {path}"
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h0, w0 = image.shape[:2]
+        
+        boxes, labels = self.load_labels(path, w0, h0)
+        
+        sample = {"image": image, "boxes": boxes, "labels": labels}
+        
         if self.transforms:
-            sample = self.transforms(sample, self.img_size)
-        img = sample["image"]
-        boxes = sample["boxes"]
-        labels = sample["labels"]
-        target = {"boxes": torch.as_tensor(boxes, dtype=torch.float32),
-                  "labels": torch.as_tensor(labels, dtype=torch.int64),
-                  "img_id": torch.tensor([i])}
-        img = torch.as_tensor(img.transpose(2, 0, 1), dtype=torch.float32) / 255.0
-        return img, target
+            transformed = self.transforms(sample)
+            image = transformed["image"]
+            boxes = transformed["boxes"]
+            labels = transformed["labels"]
+
+        # A transformação já retorna tensores, então não precisamos converter aqui
+        target = {
+            "boxes": torch.as_tensor(boxes, dtype=torch.float32),
+            "labels": torch.as_tensor(labels, dtype=torch.int64),
+            "img_id": torch.tensor([i])
+        }
+        
+        return image, target
 
 def collate_fn(batch):
     imgs, targets = zip(*batch)
+    # As imagens já são tensores, então apenas empilhamos
     return torch.stack(imgs, 0), list(targets)

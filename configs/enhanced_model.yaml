@@ -1,6 +1,6 @@
 # Enhanced model configuration for small object detection
 channels: [64, 128, 256, 384]
-img_size: 640
+img_size: 1024
 use_dysample: true
 use_frm: true
 

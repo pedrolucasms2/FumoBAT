@@ -284,6 +284,60 @@ class SmallObjectEvaluator:
             print(f"Classe {class_id}: AP = {ap:.4f} | GT: {n_annotations} | Det: {n_detections}")
         
         print("=" * 50)
+        
+    def save_results_to_json(self, results, save_path):
+        """Salva o dicionário de resultados em um arquivo JSON."""
+        # Converter arrays numpy para listas para serialização JSON
+        for key, value in results.items():
+            if isinstance(value, np.ndarray):
+                results[key] = value.tolist()
+        
+        with open(save_path, 'w') as f:
+            json.dump(results, f, indent=4)
+        print(f"Resultados de avaliação salvos em: {save_path}")
+        
+    def save_sample_images(self, loader, class_names, save_dir, num_images=10):
+        """Salva imagens de exemplo com detecções e ground truth."""
+        import cv2
+        os.makedirs(save_dir, exist_ok=True)
+        self.model.eval()
+        
+        count = 0
+        with torch.no_grad():
+            for images, targets in loader:
+                if count >= num_images:
+                    break
+                
+                images = images.to(self.device)
+                predictions, _ = self.model(images)
+                detections = self._parse_predictions(predictions, [8, 16, 32]) # Strides podem precisar de ajuste
+
+                for i in range(len(images)):
+                    if count >= num_images:
+                        break
+                    
+                    # Converter imagem de tensor para numpy (BGR)
+                    img = images[i].permute(1, 2, 0).cpu().numpy() * 255
+                    img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                    
+                    # Desenhar Ground Truth (em vermelho)
+                    for box, label in zip(targets[i]['boxes'], targets[i]['labels']):
+                        x1, y1, x2, y2 = map(int, box)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                        cv2.putText(img, class_names[label], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                    # Desenhar Predições (em verde)
+                    for box, score, label in zip(detections[i]['boxes'], detections[i]['scores'], detections[i]['labels']):
+                        if score > 0.3: # Limiar de confiança para visualização
+                           x1, y1, x2, y2 = map(int, box)
+                           cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                           label_text = f"{class_names[label]}: {score:.2f}"
+                           cv2.putText(img, label_text, (x1, y1+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    
+                    save_path = os.path.join(save_dir, f"sample_{count}.jpg")
+                    cv2.imwrite(save_path, img)
+                    count += 1
+        print(f"{count} imagens de exemplo salvas em: {save_dir}")
 
 
 def run_complete_evaluation():
@@ -448,6 +502,11 @@ def run_complete_evaluation():
     
     print("\nEvaluation completed!")
     
+    results = evaluator.compute_map()
+    eval_dir = os.path.join(project_root, "evaluation_results")
+    os.makedirs(eval_dir, exist_ok=True)
+    evaluator.save_results_to_json(results, os.path.join(eval_dir, "evaluation_metrics.json"))
+    
     # Print results
     evaluator.print_summary()
     
@@ -463,6 +522,7 @@ def run_complete_evaluation():
     except Exception as e:
         print(f"WARNING: Could not generate PR curve: {e}")
     
+
     # Additional analysis
     results = evaluator.compute_map()
     print("\nDETAILED RESULTS:")
