@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 class ConvBNAct(nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
@@ -197,29 +198,51 @@ class ObjectRelationModule(nn.Module):
         """
         B, C, H, W = x.shape
         N = H * W  # Número de "objetos" (localizações na grade)
-
+        
+        # 🚨 CORREÇÃO CRÍTICA: Limitar número de features para evitar OOM
+        MAX_FEATURES = 512  # 512x512 = ~1GB, seguro para A100
+        
+        print(f"[DEBUG RELATION] Original features: {N} (H={H}, W={W})")
+        print(f"[DEBUG RELATION] Estimated memory: {N*N*4/1024/1024/1024:.2f} GB")
+        
         # 1. Gerar características de aparência e geométricas
         features = x.permute(0, 2, 3, 1).contiguous().view(B, N, C)
-
+        
         # Gerar coordenadas para a característica geométrica
         yy, xx = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
-        # Bbox simplificado: [x_center, y_center, width, height] - assumindo w=h=1 para cada célula
         bboxes = torch.stack([xx.float(), yy.float(), torch.ones_like(xx), torch.ones_like(yy)], dim=-1).view(N, 4)
-
-        # 2. Calcular Relação Geométrica
-        # A formulação exata do artigo é para pares de bboxes, aqui adaptamos para a grade
-        # Para simplificar, calculamos a diferença de coordenadas entre todas as células
-        diff = bboxes.unsqueeze(0) - bboxes.unsqueeze(1) # Shape [N, N, 4]
+        
+        # 🔧 APLICAR LIMITAÇÃO SE NECESSÁRIO
+        if N > MAX_FEATURES:
+            print(f"[WARNING] Too many features ({N}), sampling {MAX_FEATURES} features")
+            
+            # Sampling uniforme para manter representatividade espacial
+            step = int(np.sqrt(N / MAX_FEATURES))  # Reduzir resolução uniformemente
+            indices = []
+            for i in range(0, H, step):
+                for j in range(0, W, step):
+                    if len(indices) < MAX_FEATURES:
+                        indices.append(i * W + j)
+            
+            indices = torch.tensor(indices, device=x.device)[:MAX_FEATURES]
+            
+            # Aplicar sampling
+            features = features[:, indices, :]  # [B, MAX_FEATURES, C]
+            bboxes = bboxes[indices]  # [MAX_FEATURES, 4]
+            N = len(indices)
+            
+            print(f"[INFO] Reduced to {N} features")
+        
+        # 2. Calcular Relação Geométrica (agora seguro!)
+        diff = bboxes.unsqueeze(0) - bboxes.unsqueeze(1) # Shape [N, N, 4] - agora OK!
         
         # log(|xm-xn|/wm), etc. - como wm=1, simplifica para log(|xm-xn|)
-        # Adicionamos um epsilon para evitar log(0)
         geo_features = torch.log(torch.abs(diff) + 1e-8)
         
         # Embedding da característica geométrica
         embedded_geo = self.geo_embedding(geo_features) # [N, N, d_g]
         
         # Peso geométrico com gating ReLU
-        # [N, N, d_g] -> [N, N, n_relations]
         w_g = F.relu(self.W_g(embedded_geo))
 
         # 3. Calcular Relação de Aparência
@@ -227,14 +250,10 @@ class ObjectRelationModule(nn.Module):
         k = self.W_k(features)  # [B, N, d_k]
         
         # Produto escalar para obter a matriz de atenção de aparência
-        # [B, N, d_k] x [B, d_k, N] -> [B, N, N]
         w_a = torch.bmm(q, k.transpose(1, 2)) / (self.d_k ** 0.5)
         w_a = w_a.softmax(dim=2) # Normalização
 
         # 4. Combinar Pesos e Augmentar Features
-        # w_g: [N, N, n_relations], w_a: [B, N, N]
-        # Para combinar, expandimos a dimensão do batch em w_g e a de relações em w_a
-        # Usamos uma média para simplificar a combinação dos pesos de relação
         w_g_mean = w_g.mean(dim=2).unsqueeze(0) # [1, N, N]
         
         # Combinar: peso geométrico modula o peso de aparência
@@ -249,5 +268,11 @@ class ObjectRelationModule(nn.Module):
         # Adicionar à feature original (conexão residual)
         augmented_features = features + relation_features
         
-        # Remodelar de volta para o formato de feature map
-        return augmented_features.view(B, H, W, C).permute(0, 3, 1, 2)
+        # 🔧 RECONSTRUIR FEATURE MAP
+        if N < H * W:  # Se fizemos sampling, precisamos interpolar de volta
+            # Para simplificar, vamos usar uma versão reduzida
+            new_H = new_W = int(np.sqrt(N))
+            return augmented_features.view(B, new_H, new_W, C).permute(0, 3, 1, 2)
+        else:
+            # Caso normal, sem sampling
+            return augmented_features.view(B, H, W, C).permute(0, 3, 1, 2)

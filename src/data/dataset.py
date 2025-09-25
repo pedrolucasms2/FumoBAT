@@ -78,9 +78,9 @@ class SmallObjectDataset(Dataset):
         
         transformed = self.transforms(sample)
         
-        print(f"[DEBUG Dataset] Sample keys before transforms: {list(sample.keys())}")
-        print(f"[DEBUG Dataset] Image shape: {image.shape if hasattr(image, 'shape') else type(image)}")
-        print(f"[DEBUG Dataset] Boxes type: {type(boxes)}, length: {len(boxes) if hasattr(boxes, '__len__') else 'no len'}")
+        #print(f"[DEBUG Dataset] Sample keys before transforms: {list(sample.keys())}")
+        #print(f"[DEBUG Dataset] Image shape: {image.shape if hasattr(image, 'shape') else type(image)}")
+        #print(f"[DEBUG Dataset] Boxes type: {type(boxes)}, length: {len(boxes) if hasattr(boxes, '__len__') else 'no len'}")
 
         if transformed is None:
             print(f"[ERROR] Transforms returned None for idx {idx}")
