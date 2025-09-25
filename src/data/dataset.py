@@ -1,90 +1,114 @@
-import os
-import glob
-import torch
+# src/data/dataset.py
 import cv2
 import numpy as np
+import os
+import torch
 from torch.utils.data import Dataset
-from pathlib import Path
+from typing import List, Dict, Any
 
-class YOLODataset(Dataset):
-    def __init__(self, root, split="train", img_size=640, transforms=None, class_names=None):
-        self.img_dir = os.path.join(root, "images", split)
-        self.lbl_dir = os.path.join(root, "labels", split)
-        self.paths = sorted(glob.glob(os.path.join(self.img_dir, "*.*")))
+def clamp_bbox(bbox):
+    """Clamps bounding box coordinates to the range [0.0, 1.0]."""
+    x_center, y_center, w, h = bbox
+    # Convert to x_min, y_min, x_max, y_max
+    x_min = x_center - w / 2
+    y_min = y_center - h / 2
+    x_max = x_center + w / 2
+    y_max = y_center + h / 2
+    
+    # Clamp the coordinates
+    x_min = np.clip(x_min, 0.0, 1.0)
+    y_min = np.clip(y_min, 0.0, 1.0)
+    x_max = np.clip(x_max, 0.0, 1.0)
+    y_max = np.clip(y_max, 0.0, 1.0)
+    
+    # Convert back to x_center, y_center, w, h
+    new_w = x_max - x_min
+    new_h = y_max - y_min
+    new_x_center = x_min + new_w / 2
+    new_y_center = y_min + new_h / 2
+    
+    return [new_x_center, new_y_center, new_w, new_h]
+
+class SmallObjectDataset(Dataset):
+    """Dataset for small object detection."""
+
+    def __init__(self, img_dir: str, label_dir: str, transforms=None):
+        self.img_dir = img_dir
+        self.label_dir = label_dir
         self.transforms = transforms
-        self.img_size = img_size
-        self.class_names = class_names or []
+        self.img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.png'))])
+        self.label_files = {os.path.splitext(f)[0]: f for f in os.listdir(label_dir) if f.endswith('.txt')}
 
-    def __len__(self):
-        return len(self.paths)
+    def __len__(self) -> int:
+        return len(self.img_files)
 
-    def load_labels(self, path, w, h):
-        txt_path = os.path.join(self.lbl_dir, Path(path).stem + ".txt")
-        boxes, labels = [], []
-        if os.path.isfile(txt_path):
-            with open(txt_path, "r") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) >= 5:
-                        try:
-                            # Formato YOLO: class_id, x_center, y_center, width, height
-                            c = int(parts[0])
-                            xc, yc, bw, bh = map(float, parts[1:5])
-                            
-                            # Converter de YOLO normalizado para [x1, y1, x2, y2] em pixels
-                            x1 = (xc - bw / 2) * w
-                            y1 = (yc - bh / 2) * h
-                            x2 = (xc + bw / 2) * w
-                            y2 = (yc + bh / 2) * h
-                            boxes.append([x1, y1, x2, y2])
-                            labels.append(c)
-                        except ValueError:
-                            continue # Ignora linhas mal formatadas
-        
-        # O formato para albumentations deve ser [x_min, y_min, x_max, y_max]
-        # e as labels precisam estar juntas
-        # Para YOLO, o formato é [x_center, y_center, width, height]
-        yolo_boxes = []
-        for box in boxes:
-            x1, y1, x2, y2 = box
-            xc = ((x1 + x2) / 2) / w
-            yc = ((y1 + y2) / 2) / h
-            box_w = (x2 - x1) / w
-            box_h = (y2 - y1) / h
-            yolo_boxes.append([xc, yc, box_w, box_h])
-
-        if not yolo_boxes:
-            return np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.int64)
-        
-        return np.array(yolo_boxes, dtype=np.float32), np.array(labels, dtype=np.int64)
-
-    def __getitem__(self, i):
-        path = self.paths[i]
-        image = cv2.imread(path)
-        assert image is not None, f"Image not found: {path}"
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        img_name = self.img_files[idx]
+        img_path = os.path.join(self.img_dir, img_name)
+        image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h0, w0 = image.shape[:2]
         
-        boxes, labels = self.load_labels(path, w0, h0)
+        label_name = os.path.splitext(img_name)[0]
+        boxes = []
+        labels = []
         
-        sample = {"image": image, "boxes": boxes, "labels": labels}
+        label_file_name = self.label_files.get(label_name)
+        if label_file_name:
+            label_path = os.path.join(self.label_dir, label_file_name)
+            if os.path.exists(label_path):
+                with open(label_path, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 5:
+                            class_id = int(parts[0])
+                            coords = list(map(float, parts[1:5]))
+                            # --- CORRECTION APPLIED HERE ---
+                            clamped_coords = clamp_bbox(coords)
+                            boxes.append(clamped_coords)
+                            labels.append(class_id)
         
-        if self.transforms:
-            transformed = self.transforms(sample)
-            image = transformed["image"]
-            boxes = transformed["boxes"]
-            labels = transformed["labels"]
+        boxes = np.array(boxes, dtype=np.float32).reshape(-1, 4)
+        labels = np.array(labels, dtype=np.int64)
 
-        # A transformação já retorna tensores, então não precisamos converter aqui
-        target = {
-            "boxes": torch.as_tensor(boxes, dtype=torch.float32),
-            "labels": torch.as_tensor(labels, dtype=torch.int64),
-            "img_id": torch.tensor([i])
+        sample = {
+            "image": image,
+            "bboxes": boxes,
+            "class_labels": labels
         }
         
-        return image, target
+        transformed = self.transforms(sample)
+        
+        print(f"[DEBUG Dataset] Sample keys before transforms: {list(sample.keys())}")
+        print(f"[DEBUG Dataset] Image shape: {image.shape if hasattr(image, 'shape') else type(image)}")
+        print(f"[DEBUG Dataset] Boxes type: {type(boxes)}, length: {len(boxes) if hasattr(boxes, '__len__') else 'no len'}")
+
+        if transformed is None:
+            print(f"[ERROR] Transforms returned None for idx {idx}")
+            return {
+                'image': torch.zeros((3, self.img_size, self.img_size)),
+                'boxes': torch.zeros((0, 4)),
+                'labels': torch.zeros(0)
+            }   
+    
+        return {
+            'image': transformed['image'],
+            'boxes': torch.tensor(transformed['boxes'], dtype=torch.float32),
+            'labels': torch.tensor(transformed['labels'], dtype=torch.long)
+        }
 
 def collate_fn(batch):
-    imgs, targets = zip(*batch)
-    # As imagens já são tensores, então apenas empilhamos
-    return torch.stack(imgs, 0), list(targets)
+    """Custom collate function."""
+    images = [item['image'] for item in batch]
+    boxes = [torch.tensor(item['boxes']) for item in batch]
+    labels = [torch.tensor(item['labels']) for item in batch]
+    
+    images = torch.stack(images, 0)
+    
+    targets = []
+    for i in range(len(boxes)):
+        target = {}
+        target["boxes"] = boxes[i]
+        target["labels"] = labels[i]
+        targets.append(target)
+
+    return images, targets

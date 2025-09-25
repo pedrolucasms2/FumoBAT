@@ -34,7 +34,7 @@ except ImportError:
 
     from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectLoss
-    from src.data.dataset import YOLODataset, collate_fn
+    from src.data.dataset import SmallObjectDataset as YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
 
 # (As classes EarlyStopping, WarmupCosineScheduler, etc. continuam aqui, sem alterações)
@@ -75,22 +75,40 @@ class WarmupCosineScheduler:
             param_group['lr'] = lr
         return lr
 
-def build_enhanced_dataloader(data_yaml, img_size=640, batch_size=8, workers=4, training=True):
-    # (Esta função permanece a mesma)
-    use_cuda = torch.cuda.is_available()
-    with open(data_yaml, "r") as f:
-        cfg = yaml.safe_load(f)
-    root = cfg.get("path", ".")
-    class_names = list(cfg.get("names", {}).values())
+def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, training=True):
+    """Builds an enhanced dataloader for small object detection."""
+    with open(data_yaml, 'r') as f:
+        data = yaml.safe_load(f)
+
+    path = data['path']
+    nc = data['nc']
+    class_names = data['names']
+    
+    # Determine whether to use train or val set
+    split = 'train' if training else 'val'
+    
+    # Construct the full paths to the image and label directories
+    img_dir = os.path.join(path, data[split])
+    # This assumes a standard YOLO directory structure where 'labels' is parallel to 'images'
+    label_dir = img_dir.replace('images', 'labels')
+
+    # Initialize your augmentation pipeline
     transforms = SmallObjectAugmentationPipeline(img_size=img_size, training=training)
-    if training:
-        dataset = YOLODataset(root, "train", img_size, transforms=transforms, class_names=class_names)
-        shuffle = True
-    else:
-        dataset = YOLODataset(root, "val", img_size, transforms=transforms, class_names=class_names)
-        shuffle = False
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=workers, pin_memory=use_cuda, collate_fn=collate_fn, drop_last=training, persistent_workers=workers > 0)
-    nc = len(cfg.get("names", {}))
+    
+    # --- CORRECTION APPLIED HERE ---
+    # Create the dataset with the correct arguments
+    dataset = YOLODataset(img_dir=img_dir, label_dir=label_dir, transforms=transforms)
+    
+    # Create the DataLoader
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=training,
+        num_workers=workers,
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
     return dataloader, nc
 
 def calculate_metrics(outputs, targets, strides, conf_threshold=0.1, iou_threshold=0.5):

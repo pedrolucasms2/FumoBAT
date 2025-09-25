@@ -98,10 +98,12 @@ class SmallObjectCopyPaste:
 
 def get_small_object_transforms(img_size=640, training=True):
     """Get optimized transforms for small object detection"""
+    bbox_params = A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1)
+
     if training:
         return A.Compose([
-            # --- CORREÇÃO APLICADA AQUI ---
-            A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.8, 1.0), ratio=(0.9, 1.1), p=0.5),
+            # --- THIS IS THE CORRECTED LINE ---
+            A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0), ratio=(0.9, 1.1), p=0.5),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.1),
             A.RandomRotate90(p=0.2),
@@ -122,14 +124,13 @@ def get_small_object_transforms(img_size=640, training=True):
             A.Resize(height=img_size, width=img_size),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1))
+        ], bbox_params=bbox_params)
     else: # Validation/Testing
         return A.Compose([
             A.Resize(height=img_size, width=img_size),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
-        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-
+        ], bbox_params=bbox_params)
 class MultiScaleTransforms:
     """Multi-scale training class, which can be pickled for multiprocessing."""
     def __init__(self, scales=[480, 512, 544, 576, 608, 640, 672, 704, 736], target_size=640):
@@ -140,46 +141,60 @@ class MultiScaleTransforms:
         scale = random.choice(self.scales)
         h, w = image.shape[:2]
         new_h, new_w = (scale, int(scale * w / h)) if h > w else (int(scale * h / w), scale)
-        
+
         transforms = A.Compose([
             A.Resize(height=new_h, width=new_w),
             A.PadIfNeeded(min_height=scale, min_width=scale, border_mode=cv2.BORDER_CONSTANT, position='center'),
             A.Resize(height=self.target_size, width=self.target_size),
         ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-        
-        return transforms(image=image, bboxes=bboxes, class_labels=class_labels)
 
+        return transforms(image=image, bboxes=bboxes, class_labels=class_labels)
 class SmallObjectAugmentationPipeline:
-    """Complete augmentation pipeline for small object detection"""
+    """Simplified augmentation pipeline for debugging"""
     def __init__(self, img_size=640, training=True):
         self.img_size = img_size
         self.training = training
-        self.mixup = SmallObjectMixUp(alpha=0.2, prob=0.2)
-        self.mosaic = SmallObjectMosaic(size=img_size, prob=0.3)
-        self.copy_paste = SmallObjectCopyPaste(prob=0.2)
-        self.transforms = get_small_object_transforms(img_size, training)
-        self.multi_scale = MultiScaleTransforms(target_size=img_size)
-
-    def __call__(self, sample):
-        image, boxes, labels = sample["image"], sample["boxes"], sample.get("labels", [])
-        class_labels = labels.tolist() if isinstance(labels, np.ndarray) else list(labels)
-
-        if not self.training:
-            result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
-            return {"image": result["image"], "boxes": result["bboxes"], "labels": result["class_labels"]}
         
-        if random.random() < 0.5:
-            result = self.multi_scale(image=image, bboxes=boxes, class_labels=class_labels)
-            image, boxes, class_labels = result['image'], result['bboxes'], result['class_labels']
+        # Transformações básicas e estáveis
+        self.transforms = A.Compose([
+            A.Resize(height=img_size, width=img_size),
+            A.HorizontalFlip(p=0.5),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
+    def __call__(self, sample=None, **kwargs):
+        # Já sabemos que o sample tem ['image', 'bboxes', 'class_labels']
+        if sample is not None:
+            image = sample['image']
+            boxes = sample['bboxes'] 
+            labels = sample['class_labels']
+        else:
+            image = kwargs.get("image")
+            boxes = kwargs.get("boxes", [])
+            labels = kwargs.get("labels", [])
+        
+        # Verificar se temos dados válidos
+        if image is None:
+            return {
+                "image": torch.zeros((3, self.img_size, self.img_size)),
+                "boxes": [],
+                "labels": []
+            }
+        
+        class_labels = labels.tolist() if isinstance(labels, np.ndarray) else list(labels)
         
         try:
             result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
-            return {"image": result["image"], "boxes": result["bboxes"], "labels": result["class_labels"]}
-        except Exception:
-            basic_transforms = A.Compose([
-                A.Resize(height=self.img_size, width=self.img_size),
-                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                ToTensorV2(),
-            ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-            result = basic_transforms(image=image, bboxes=boxes, class_labels=class_labels)
-            return {"image": result["image"], "boxes": result["bboxes"], "labels": result["class_labels"]}
+            return {
+                "image": result["image"], 
+                "boxes": result["bboxes"], 
+                "labels": result["class_labels"]
+            }
+        except Exception as e:
+            print(f"Error in transforms: {e}")
+            return {
+                "image": torch.zeros((3, self.img_size, self.img_size)),
+                "boxes": [],
+                "labels": []
+            }
