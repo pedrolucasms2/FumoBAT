@@ -1,7 +1,7 @@
 # src/models/model.py
 import torch
 import torch.nn as nn
-from .blocks import ConvBNAct, RFCBAMDownsample, C2f_PIG, CAA, DySample, FRM
+from .blocks import ConvBNAct, RFCBAMDownsample, C2f_PIG, CAA, DySample, FRM, ObjectRelationModule
 
 class DetectHead(nn.Module):
     def __init__(self, c, nc):
@@ -83,6 +83,11 @@ class SmallObjectYOLO(nn.Module):
         self.down34, self.b4 = RFCBAMDownsample(c3, c4), C2f_PIG(c4, c4, mode='light')
         self.caa = CAA(c4, k=9)
         self.neck = BSSIFPN(c1, c2, c3, c4)
+
+        self.relation_p2 = ObjectRelationModule(c_in=c2) # 128 canais
+        self.relation_p3 = ObjectRelationModule(c_in=c3) # 256 canais
+        self.relation_p4 = ObjectRelationModule(c_in=c3) # 256 canais (saída do neck para p4 é c3)
+
         self.head_p2 = DetectHead(c2, nc)  # 128 canais
         self.head_p3 = DetectHead(c3, nc)  # 256 canais  
         self.head_p4 = DetectHead(c3, nc)  # 256 canais
@@ -97,7 +102,12 @@ class SmallObjectYOLO(nn.Module):
         B4 = self.b4(self.down34(B3))  # 1/16
         B4 = self.caa(B4)
         P2, P3, P4 = self.neck(B1, B2, B3, B4)
-        return [self.head_p2(P2), self.head_p3(P3), self.head_p4(P4)], self.strides
+
+        P2_rel = self.relation_p2(P2)
+        P3_rel = self.relation_p3(P3)
+        P4_rel = self.relation_p4(P4)
+
+        return [self.head_p2(P2_rel), self.head_p3(P3_rel), self.head_p4(P4_rel)], self.strides
 
 if __name__ == "__main__":
     m = SmallObjectYOLO(nc=2)
