@@ -1,0 +1,32 @@
+{
+  "timestamp": "2025-09-04T15:56:29.567682",
+  "model_info": {
+    "num_classes": 1,
+    "class_names": [
+      "fumo"
+    ],
+    "confidence_threshold": 0.1
+  },
+  "metrics": {
+    "mAP": 0.0,
+    "APs": [
+      0.0
+    ]
+  },
+  "statistics": {
+    "total_images": 17,
+    "total_objects": 73,
+    "total_detections": 408758,
+    "small_objects": 0,
+    "medium_objects": 0,
+    "large_objects": 73,
+    "avg_inference_time_ms": 0
+  },
+  "per_class_results": {
+    "fumo": {
+      "AP": 0.0,
+      "total_objects": 73,
+      "total_detections": 408758
+    }
+  }
+}

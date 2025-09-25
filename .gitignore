@@ -32,7 +32,6 @@ runs/
 wandb/
 
 # Datasets and data files
-datasets/
 data/
 *.jpg
 *.jpeg
@@ -50,14 +49,6 @@ data/
 *.h5
 !weights_small_object_yolo.pt  # Keep the essential pretrained weights
 
-# Results and evaluation
-results/
-evaluation_results/
-*.json
-*.csv
-*.txt
-detection_result.jpg
-result.jpg
 
 # Temporary files
 tmp/

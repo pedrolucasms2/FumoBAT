@@ -86,7 +86,7 @@ class SmallObjectLoss(nn.Module):
                 'obj': 1.0,
                 'focal_loss_gamma': 1.5,
                 'fl_gamma': 0.0,
-                'small_obj_weight': 2.0,  # Peso maior para objetos pequenos
+                'small_obj_weight': 2.0,  # Higher weight for small objects
                 'iou_type': 'CIoU'
             }
         
@@ -127,8 +127,10 @@ class SmallObjectLoss(nn.Module):
             gain = torch.tensor(pred.shape)[[3, 2, 3, 2]].to(targets.device)  # xyxy gain
 
             # Match targets to anchors
-            t = targets * gain
+            t = targets.clone()
             if nt:
+                # Scale box coordinates
+                t[:, :, 2:6] *= gain
                 # Matches
                 r = t[:, :, 4:6] / anchors_i[:, None]  # wh ratio
                 j = torch.max(r, 1 / r).max(2)[0] < 4  # compare
@@ -147,13 +149,16 @@ class SmallObjectLoss(nn.Module):
                 offsets = 0
 
             # Define
-            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
-            a, (b, c) = a.long().view(-1), bc.long().T  # anchors, image, class
+            b, c = t[:, 0].long(), t[:, 1].long()
+            gxy = t[:, 2:4]
+            gwh = t[:, 4:6]
+            a = t[:, 6].long()
+            
             gij = (gxy - offsets).long()
             gi, gj = gij.T  # grid indices
 
             # Append
-            indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
+            indices.append((b, a, gj.clamp_(0, gain[3].item() - 1), gi.clamp_(0, gain[2].item() - 1)))
             tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
             anchors.append(anchors_i[a])  # anchors
             tcls.append(c)  # class
@@ -166,8 +171,23 @@ class SmallObjectLoss(nn.Module):
             p: list of predictions [P3, P4, P5] 
             targets: ground truth targets
         """
-        device = targets.device
+        device = p[0].device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+        
+        # Prepare targets
+        targets_list = []
+        for i, t in enumerate(targets):
+            img_idx = torch.full((t['labels'].shape[0], 1), i, device=device, dtype=torch.float)
+            boxes = t['boxes'].to(device)
+            labels = t['labels'][:, None].to(device).float()
+            targets_list.append(torch.cat([img_idx, labels, boxes], 1))
+
+        if len(targets_list) > 0:
+            targets = torch.cat(targets_list, 0)
+        else:
+            targets = torch.zeros(0, 6, device=device)
+
+
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
 
         # Losses
