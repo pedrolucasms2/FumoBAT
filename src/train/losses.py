@@ -199,6 +199,19 @@ class SmallObjectLoss(nn.Module):
             if n:
                 ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
 
+                # 🔧 DEBUG E VERIFICAÇÃO DE SEGURANÇA
+                print(f"[DEBUG LOSS] ps shape: {ps.shape}")
+                print(f"[DEBUG LOSS] ps dimensions: {ps.dim()}")
+                print(f"[DEBUG LOSS] n targets: {n}")
+                
+                if ps.dim() < 2 or ps.shape[0] == 0:
+                    print(f"[WARNING] ps has invalid shape: {ps.shape}, skipping this layer")
+                    continue
+                
+                if ps.shape[1] < 5:
+                    print(f"[ERROR] ps has only {ps.shape[1]} features, expected at least 5")
+                    continue
+
                 # Regression
                 pxy = ps[:, :2].sigmoid() * 2 - 0.5
                 pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
