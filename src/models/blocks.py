@@ -268,11 +268,8 @@ class ObjectRelationModule(nn.Module):
         # Adicionar à feature original (conexão residual)
         augmented_features = features + relation_features
         
-        # 🔧 RECONSTRUIR FEATURE MAP
-        if N < H * W:  # Se fizemos sampling, precisamos interpolar de volta
-            # Para simplificar, vamos usar uma versão reduzida
-            new_H = new_W = int(np.sqrt(N))
-            return augmented_features.view(B, new_H, new_W, C).permute(0, 3, 1, 2)
+        if N < H * W:  
+            temp_features = augmented_features.view(B, int(np.sqrt(N)), int(np.sqrt(N)), C).permute(0, 3, 1, 2)
+            return F.interpolate(temp_features, size=(H, W), mode='bilinear', align_corners=False)
         else:
-            # Caso normal, sem sampling
             return augmented_features.view(B, H, W, C).permute(0, 3, 1, 2)
