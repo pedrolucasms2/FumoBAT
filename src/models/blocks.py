@@ -1,4 +1,4 @@
-# src/models/blocks.py
+
 import math
 import torch
 import torch.nn as nn
@@ -142,82 +142,65 @@ class DySample(nn.Module):
 class FRM(nn.Module):
     def __init__(self, c_up, c_skip):
         super().__init__()
-        # Primeiro, alinhe os canais se forem diferentes
+    
         self.align = nn.Conv2d(c_up, c_skip, 1, bias=False) if c_up != c_skip else nn.Identity()
         
-        # Gate para combinar as features
+    
         self.g = nn.Sequential(
-            nn.Conv2d(c_skip * 2, c_skip, 1, bias=False),  # 2*c_skip -> c_skip
+            nn.Conv2d(c_skip * 2, c_skip, 1, bias=False), 
             nn.SiLU(),
             nn.Conv2d(c_skip, 1, 1)
         )
     
     def forward(self, up, skip):
-        # Redimensionar se necessário
+    
         if up.shape[-2:] != skip.shape[-2:]:
             up = F.interpolate(up, size=skip.shape[-2:], mode='bilinear', align_corners=True)
         
-        # Alinhar canais
+    
         up_aligned = self.align(up)
         
-        # Gerar peso de combinação
+    
         delta = torch.sigmoid(self.g(torch.cat([up_aligned, skip], 1)))
         
-        # Combinar features
+    
         return delta * skip + (1 - delta) * up_aligned
 
 class ObjectRelationModule(nn.Module):
-    """
-    Object Relation Module for contextual reasoning, inspired by "Relation Networks for Object Detection".
-    """
     def __init__(self, c_in, n_relations=16, d_k=64, d_g=64):
         super().__init__()
         self.n_relations = n_relations
         self.d_k = d_k
         self.d_g = d_g
-
-        # Projeções para Key, Query, Value (para a relação de aparência)
+    
         self.W_k = nn.Linear(c_in, d_k)
         self.W_q = nn.Linear(c_in, d_k)
         self.W_v = nn.Linear(c_in, c_in)
-
-        # Embedding para a característica geométrica
+    
         self.geo_embedding = nn.Sequential(
             nn.Linear(4, d_g),
             nn.ReLU(),
             nn.Linear(d_g, d_g),
             nn.ReLU()
         )
-        
-        # Matriz de peso para a relação geométrica
+            
         self.W_g = nn.Linear(d_g, n_relations)
 
     def forward(self, x):
-        """
-        x: feature map de entrada com shape [B, C, H, W]
-        """
         B, C, H, W = x.shape
-        N = H * W  # Número de "objetos" (localizações na grade)
-        
-        # 🚨 CORREÇÃO CRÍTICA: Limitar número de features para evitar OOM
-        MAX_FEATURES = 512  # 512x512 = ~1GB, seguro para A100
-        
-        print(f"[DEBUG RELATION] Original features: {N} (H={H}, W={W})")
-        print(f"[DEBUG RELATION] Estimated memory: {N*N*4/1024/1024/1024:.2f} GB")
-        
-        # 1. Gerar características de aparência e geométricas
-        features = x.permute(0, 2, 3, 1).contiguous().view(B, N, C)
-        
-        # Gerar coordenadas para a característica geométrica
-        yy, xx = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
-        bboxes = torch.stack([xx.float(), yy.float(), torch.ones_like(xx), torch.ones_like(yy)], dim=-1).view(N, 4)
-        
-        # 🔧 APLICAR LIMITAÇÃO SE NECESSÁRIO
-        if N > MAX_FEATURES:
-            print(f"[WARNING] Too many features ({N}), sampling {MAX_FEATURES} features")
+        N = H * W 
             
-            # Sampling uniforme para manter representatividade espacial
-            step = int(np.sqrt(N / MAX_FEATURES))  # Reduzir resolução uniformemente
+        MAX_FEATURES = 8192 
+         
+        features = x.permute(0, 2, 3, 1).contiguous().view(B, N, C)        
+    
+        yy, xx = torch.meshgrid(torch.arange(H, device=x.device), torch.arange(W, device=x.device), indexing='ij')
+        bboxes = torch.stack([xx.float(), yy.float(), torch.ones_like(xx), torch.ones_like(yy)], dim=-1).view(N, 4)        
+    
+        if N > MAX_FEATURES:
+            print(f"[WARNING] Too many features ({N}), sampling {MAX_FEATURES} features")            
+        
+            step = int(np.sqrt(N / MAX_FEATURES)) 
             indices = []
             for i in range(0, H, step):
                 for j in range(0, W, step):
@@ -225,54 +208,41 @@ class ObjectRelationModule(nn.Module):
                         indices.append(i * W + j)
             
             indices = torch.tensor(indices, device=x.device)[:MAX_FEATURES]
-            
-            # Aplicar sampling
-            features = features[:, indices, :]  # [B, MAX_FEATURES, C]
-            bboxes = bboxes[indices]  # [MAX_FEATURES, 4]
+                    
+            features = features[:, indices, :] 
+            bboxes = bboxes[indices] 
             N = len(indices)
             
             print(f"[INFO] Reduced to {N} features")
-        
-        # 2. Calcular Relação Geométrica (agora seguro!)
-        diff = bboxes.unsqueeze(0) - bboxes.unsqueeze(1) # Shape [N, N, 4] - agora OK!
-        
-        # log(|xm-xn|/wm), etc. - como wm=1, simplifica para log(|xm-xn|)
+            
+        diff = bboxes.unsqueeze(0) - bboxes.unsqueeze(1)
+            
         geo_features = torch.log(torch.abs(diff) + 1e-8)
-        
-        # Embedding da característica geométrica
-        embedded_geo = self.geo_embedding(geo_features) # [N, N, d_g]
-        
-        # Peso geométrico com gating ReLU
+            
+        embedded_geo = self.geo_embedding(geo_features)
+            
         w_g = F.relu(self.W_g(embedded_geo))
 
-        # 3. Calcular Relação de Aparência
-        q = self.W_q(features)  # [B, N, d_k]
-        k = self.W_k(features)  # [B, N, d_k]
-        
-        # Produto escalar para obter a matriz de atenção de aparência
+        q = self.W_q(features) 
+        k = self.W_k(features) 
+            
         w_a = torch.bmm(q, k.transpose(1, 2)) / (self.d_k ** 0.5)
-        w_a = w_a.softmax(dim=2) # Normalização
-
-        # 4. Combinar Pesos e Augmentar Features
-        w_g_mean = w_g.mean(dim=2).unsqueeze(0) # [1, N, N]
-        
-        # Combinar: peso geométrico modula o peso de aparência
-        w_mn = w_a * w_g_mean # [B, N, N]
-
-        # 5. Augmentar a feature
-        v = self.W_v(features) # [B, N, C]
-        
-        # Agregar features de "valor" com base no peso combinado
-        relation_features = torch.bmm(w_mn, v) # [B, N, C]
-        
-        # Adicionar à feature original (conexão residual)
+        w_a = w_a.softmax(dim=2)
+    
+        w_g_mean = w_g.mean(dim=2).unsqueeze(0)
+            
+        w_mn = w_a * w_g_mean
+    
+        v = self.W_v(features)
+            
+        relation_features = torch.bmm(w_mn, v)
+            
         augmented_features = features + relation_features
-        
-        # 🔧 CORREÇÃO DO RESHAPE - SOLUÇÃO MAIS ROBUSTA
-        if N < H * W:  # Se fizemos sampling
-    # SOLUÇÃO SIMPLES: Retornar input original
+            
+        if N < H * W: 
+
             print(f"[WARNING] Returning original feature map due to sampling")
             return x
         else:
-            # Caso normal, sem sampling
+        
             return augmented_features.view(B, H, W, C).permute(0, 3, 1, 2)

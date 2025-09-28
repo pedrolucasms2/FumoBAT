@@ -165,15 +165,17 @@ class SmallObjectLoss(nn.Module):
 
         return tcls, tbox, indices, anchors
 
+    # In src/train/losses.py
+
     def forward(self, p, targets):
         """
         Args:
-            p: list of predictions [P3, P4, P5] 
+            p: list of predictions [P3, P4, P5]
             targets: ground truth targets
         """
         device = p[0].device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        
+
         # Prepare targets
         targets_list = []
         for i, t in enumerate(targets):
@@ -187,70 +189,25 @@ class SmallObjectLoss(nn.Module):
         else:
             targets = torch.zeros(0, 6, device=device)
 
+        # --- FIX STARTS HERE ---
+        # Add a dummy anchor dimension to predictions to match the loss function's expectation
+        p_reshaped = []
+        for pi in p:
+            # pi shape: [batch, features, height, width]
+            bs, _, ny, nx = pi.shape
+            # Reshape to [batch, 1 (anchor), features, height, width]
+            pi = pi.view(bs, 1, -1, ny, nx)
+            # Permute to [batch, 1 (anchor), height, width, features]
+            pi = pi.permute(0, 1, 3, 4, 2).contiguous()
+            p_reshaped.append(pi)
+        # --- FIX ENDS HERE ---
 
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
+        tcls, tbox, indices, anchors = self.build_targets(p_reshaped, targets)  # targets
 
         # Losses
-        for i, pi in enumerate(p):  # layer index, layer predictions
+        for i, pi in enumerate(p_reshaped):  # layer index, layer predictions
             b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
             tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
-
-            n = b.shape[0]  # number of targets
-            if n:
-                ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
-
-                # 🔧 DEBUG E VERIFICAÇÃO DE SEGURANÇA
-                print(f"[DEBUG LOSS] ps shape: {ps.shape}")
-                print(f"[DEBUG LOSS] ps dimensions: {ps.dim()}")
-                print(f"[DEBUG LOSS] n targets: {n}")
-                
-                if ps.dim() < 2 or ps.shape[0] == 0:
-                    print(f"[WARNING] ps has invalid shape: {ps.shape}, skipping this layer")
-                    continue
-                
-                if ps.shape[1] < 5:
-                    print(f"[ERROR] ps has only {ps.shape[1]} features, expected at least 5")
-                    continue
-
-                # Regression
-                pxy = ps[:, :2].sigmoid() * 2 - 0.5
-                pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
-                pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                
-                # IoU calculation
-                iou = bbox_iou(pbox.T, tbox[i].T, CIoU=True).squeeze()  # iou(prediction, target)
-                
-                # Small object emphasis - increase weight for smaller objects
-                area = tbox[i][:, 2] * tbox[i][:, 3]  # width * height
-                small_weight = torch.where(area < 0.1, self.hyp['small_obj_weight'], 1.0)
-                
-                lbox += ((1.0 - iou) * small_weight).mean()  # iou loss
-
-                # Objectness
-                score_iou = iou.detach().clamp(0).type(tobj.dtype)
-                tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * score_iou  # iou ratio
-
-                # Classification
-                if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(ps[:, 5:], 0, device=device)  # targets
-                    t[range(n), tcls[i]] = 1
-                    lcls += self.focal_loss(ps[:, 5:], t)
-
-            # Objectness loss with focal loss for hard examples
-            obji = F.binary_cross_entropy_with_logits(pi[..., 4], tobj, reduction='none')
-            # Apply focal loss weight
-            pt = torch.exp(-obji)
-            focal_weight = (1 - pt) ** self.hyp['fl_gamma']
-            lobj += (focal_weight * obji).mean()
-
-        # Scale losses
-        lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
-        lcls *= self.hyp['cls']
-        
-        bs = tobj.shape[0]  # batch size
-        
-        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls)).detach()
 
 class EIoULoss(nn.Module):
     """
