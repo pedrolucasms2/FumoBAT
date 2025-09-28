@@ -240,7 +240,7 @@ def enhanced_train(
                 loss.backward()
                 optimizer.step()
             
-            epoch_loss += loss.item()
+            epoch_loss = epoch_loss + loss.item()
         
         # Validation
         model.eval()
