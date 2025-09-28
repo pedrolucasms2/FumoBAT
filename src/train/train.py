@@ -271,7 +271,15 @@ def enhanced_train(
         logger.info(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | Train Loss: {epoch_loss:.4f} | Val Loss: {val_loss:.4f} | Precision: {val_metrics['precision']:.4f}, Recall: {val_metrics['recall']:.4f}")
 
         # Salvar histórico
-        epoch_results = {'epoch': epoch+1, 'lr': current_lr, 'train_loss': epoch_loss, 'val_loss': val_loss, **val_metrics}
+        epoch_results = {
+            'epoch': epoch+1, 
+            'lr': float(current_lr), 
+            'train_loss': float(epoch_loss), 
+            'val_loss': float(val_loss),
+            'precision': float(val_metrics['precision']),
+            'recall': float(val_metrics['recall']),
+            'f1': float(val_metrics['f1'])
+        }
         history.append(epoch_results)
         with open(os.path.join(save_dir, 'training_history.json'), 'w') as f:
             json.dump(history, f, indent=4)
