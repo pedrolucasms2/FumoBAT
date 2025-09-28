@@ -86,7 +86,7 @@ class SmallObjectLoss(nn.Module):
                 'obj': 1.0,
                 'focal_loss_gamma': 1.5,
                 'fl_gamma': 0.0,
-                'small_obj_weight': 2.0,  # Higher weight for small objects
+                'small_obj_weight': 2.0,  
                 'iou_type': 'CIoU'
             }
         
@@ -94,14 +94,13 @@ class SmallObjectLoss(nn.Module):
         self.nc = nc
         self.device = device
         
-        # Loss functions
-        self.BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp.get('cls_pw', 1.0)]))
-        self.BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp.get('obj_pw', 1.0)]))
+        self.BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp.get('cls_pw', 1.0)], device=device))
+        self.BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp.get('obj_pw', 1.0)], device=device))
         self.focal_loss = FocalLoss(gamma=hyp['focal_loss_gamma'])
         
-        # Class weights for focal loss
-        self.gr = 1.0  # giou loss ratio (obj_loss = 1.0 or giou)
+        self.gr = 1.0  
         self.autobalance = False
+
         
     def build_targets(self, p, targets):
         """Build targets for loss computation with small object emphasis."""
