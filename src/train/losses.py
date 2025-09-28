@@ -208,6 +208,38 @@ class SmallObjectLoss(nn.Module):
         for i, pi in enumerate(p_reshaped):  # layer index, layer predictions
             b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
             tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
+            
+            # 🔧 CORREÇÃO: Indentação corrigida - fica DENTRO do for
+            if len(b):
+                # Predictions
+                pxy = torch.sigmoid(pi[b, a, gj, gi, :2])  # predicted xy
+                pwh = pi[b, a, gj, gi, 2:4]  # predicted wh
+                pbox = torch.cat((pxy, torch.exp(pwh) * anchors[i]), 1)  # predicted box
+                
+                # Box loss
+                iou = bbox_iou(pbox.T, tbox[i], CIoU=True).squeeze()
+                lbox += (1.0 - iou).mean()
+                
+                # Objectness
+                tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)
+                
+                # Classification
+                if self.nc > 1:
+                    t = torch.full_like(pi[..., 5:], 0, device=device)
+                    t[b, a, gj, gi, tcls[i]] = 1
+                    lcls += self.BCEcls(pi[..., 5:], t)
+
+            # Objectness loss (também DENTRO do for, mas fora do if)
+            lobj += self.BCEobj(pi[..., 4], tobj)
+
+        # Total loss (FORA do for)
+        lbox *= self.hyp['box']
+        lobj *= self.hyp['obj']
+        lcls *= self.hyp['cls']
+        
+        loss = lbox + lobj + lcls
+        
+        return loss, torch.cat((lbox, lobj, lcls, loss)).detach()
 
 class EIoULoss(nn.Module):
     """
