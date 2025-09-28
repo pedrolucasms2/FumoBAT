@@ -179,22 +179,25 @@ def enhanced_train(
     # Usando a nova arquitetura com Módulo de Relação
     model = SmallObjectYOLO(nc=nc, ch=model_cfg.get('channels', [64, 128, 256, 384]))
     
-    if weights and os.path.exists(weights):
-        logger.info(f"Loading weights from {weights}")
-        checkpoint = torch.load(weights, map_location=device)
-        # Ajuste para carregar pesos mesmo com a nova arquitetura
-        model_dict = model.state_dict()
-        pretrained_dict = {k: v for k, v in checkpoint.items() if k in model_dict and v.shape == model_dict[k].shape}
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
-        logger.info(f"Loaded {len(pretrained_dict)} layers from pretrained weights.")
+    # if weights and os.path.exists(weights):
+    #     logger.info(f"Loading weights from {weights}")
+    #     checkpoint = torch.load(weights, map_location=device)
+    #     # Ajuste para carregar pesos mesmo com a nova arquitetura
+    #     model_dict = model.state_dict()
+    #     pretrained_dict = {k: v for k, v in checkpoint.items() if k in model_dict and v.shape == model_dict[k].shape}
+    #     model_dict.update(pretrained_dict)
+    #     model.load_state_dict(model_dict)
+    #     logger.info(f"Loaded {len(pretrained_dict)} layers from pretrained weights.")
+    
+    logger.info("Initializing model with random weights - training from scratch")
 
     model = model.to(device)
     
     # Loss, Optimizer, Scheduler, etc.
     criterion = SmallObjectLoss(nc=nc, device=device, hyp={'box': 0.05, 'cls': 0.3, 'obj': 1.0, 'focal_loss_gamma': 2.0, 'fl_gamma': 1.5, 'small_obj_weight': 3.0, 'iou_type': 'CIoU'})
     optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=5e-4)
-    scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=5, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
+    # 🔧 ALTERAÇÃO C: Aumentar warmup_epochs de 5 para 10
+    scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
     scaler = GradScaler() if device == 'cuda' else None
     early_stopping = EarlyStopping(patience=30, min_delta=0.001)
 
@@ -270,8 +273,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Enhanced Training for Small Object Detection')
     parser.add_argument('--img-size', type=int, default=1024, help='Image size for training')
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size for training (A100 can handle this with 1024px)')
-    parser.add_argument('--epochs', type=int, default=150, help='Total number of epochs')
-    parser.add_argument('--lr', type=float, default=5e-4, help='Initial learning rate')
+    # 🔧 ALTERAÇÃO B: Aumentar epochs de 150 para 200
+    parser.add_argument('--epochs', type=int, default=200, help='Total number of epochs')
+    # 🔧 ALTERAÇÃO A: Aumentar learning rate de 5e-4 para 1e-3
+    parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--data', type=str, default='configs/data.yaml', help='Path to data.yaml')
     parser.add_argument('--model', type=str, default='configs/enhanced_model.yaml', help='Path to model.yaml')
     parser.add_argument('--weights', type=str, default='weights_small_object_yolo.pt', help='Path to pretrained weights')
