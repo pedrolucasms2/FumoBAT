@@ -99,8 +99,10 @@ class SmallObjectDataset(Dataset):
 def collate_fn(batch):
     """Custom collate function."""
     images = [item['image'] for item in batch]
-    boxes = [torch.tensor(item['boxes']) for item in batch]
-    labels = [torch.tensor(item['labels']) for item in batch]
+    boxes = [item['boxes'].detach().clone() if torch.is_tensor(item['boxes']) 
+         else torch.tensor(item['boxes']) for item in batch]
+    labels = [item['labels'].detach().clone() if torch.is_tensor(item['labels']) 
+            else torch.tensor(item['labels']) for item in batch]
     
     images = torch.stack(images, 0)
     

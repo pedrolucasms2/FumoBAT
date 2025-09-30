@@ -23,7 +23,7 @@ import numpy as np
 try:
     from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectYOLOLoss as SmallObjectLoss
-    from src.data.dataset import YOLODataset, collate_fn
+    from src.data.dataset import SmallObjectDataset, collate_fn 
     from src.data.transforms import SmallObjectAugmentationPipeline
 except ImportError:
     # Fallback para imports diretos
@@ -35,7 +35,7 @@ except ImportError:
 
     from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectLoss
-    from src.data.dataset import SmallObjectDataset as YOLODataset, collate_fn
+    from src.data.dataset import SmallObjectDataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
 
 # (As classes EarlyStopping, WarmupCosineScheduler, etc. continuam aqui, sem alterações)
@@ -98,7 +98,7 @@ def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, traini
     
     # --- CORRECTION APPLIED HERE ---
     # Create the dataset with the correct arguments
-    dataset = YOLODataset(img_dir=img_dir, label_dir=label_dir, transforms=transforms)
+    dataset = SmallObjectDataset(img_dir=img_dir, label_dir=label_dir, transforms=transforms)
     
     # Create the DataLoader
     dataloader = DataLoader(
