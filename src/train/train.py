@@ -22,7 +22,7 @@ import numpy as np
 # Imports relativos corrigidos
 try:
     from src.models.model import SmallObjectYOLO
-    from src.train.losses import SmallObjectLoss, SmallObjectYOLOLoss
+    from src.train.losses import SmallObjectLoss
     from src.data.dataset import YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
 except ImportError:
@@ -195,7 +195,7 @@ def enhanced_train(
     model = model.to(device)
     
     # Loss, Optimizer, Scheduler, etc.
-    criterion = SmallObjectYOLOLoss(nc=nc, device=device, focal_gamma=0.5)
+    criterion = SmallObjectLoss(nc=nc, device=device, hyp={'box': 0.05, 'cls': 0.5, 'obj': 1.0, 'focal_loss_gamma': 1.5, 'fl_gamma': 0.0, 'small_obj_weight': 2.0, 'iou_type': 'CIoU'})
     optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=5e-4)
     scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
     scaler = GradScaler() if device == 'cuda' else None
