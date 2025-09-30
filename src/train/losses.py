@@ -157,8 +157,8 @@ class SmallObjectYOLOLoss(nn.Module):
                         anchor_ious = []
                         for a_idx, anchor in enumerate(anchors_i):
                             # Calculate IoU between target and anchor
-                            anchor_box = torch.cat([torch.zeros(2), anchor])  # [0, 0, w, h]
-                            target_box = torch.cat([torch.zeros(2), gwh[0]])   # [0, 0, w, h] 
+                            anchor_box = torch.cat([torch.zeros(2, device=anchor.device), anchor])  # [0, 0, w, h]
+                            target_box = torch.cat([torch.zeros(2, device=gwh.device), gwh[0]])
                             iou = bbox_iou(anchor_box.unsqueeze(0), target_box.unsqueeze(0), xywh=True).item()
                             anchor_ious.append(iou)
                         
