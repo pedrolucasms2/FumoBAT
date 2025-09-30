@@ -22,7 +22,7 @@ import numpy as np
 # Imports relativos corrigidos
 try:
     from src.models.model import SmallObjectYOLO
-    from src.train.losses import SmallObjectLoss
+    from src.train.losses import SmallObjectLoss, SmallObjectYOLOLoss
     from src.data.dataset import YOLODataset, collate_fn
     from src.data.transforms import SmallObjectAugmentationPipeline
 except ImportError:
@@ -195,12 +195,12 @@ def enhanced_train(
     model = model.to(device)
     
     # Loss, Optimizer, Scheduler, etc.
-    criterion = SmallObjectLoss(nc=nc, device=device, hyp={'box': 0.05, 'cls': 0.3, 'obj': 1.0, 'focal_loss_gamma': 2.0, 'fl_gamma': 1.5, 'small_obj_weight': 3.0, 'iou_type': 'CIoU'})
+    criterion = SmallObjectYOLOLoss(nc=nc, device=device, focal_gamma=0.5)
     optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=5e-4)
-    # 🔧 ALTERAÇÃO C: Aumentar warmup_epochs de 5 para 10
     scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
     scaler = GradScaler() if device == 'cuda' else None
     early_stopping = EarlyStopping(patience=30, min_delta=0.001)
+
 
     # Training loop
     logger.info("Starting training...")
@@ -219,24 +219,13 @@ def enhanced_train(
             if scaler is not None:
                 with autocast():
                     outputs, strides = model(images)
-                    print("Using simplified loss to avoid indexing issues...")
-                    loss = torch.tensor(0.0, device=device, requires_grad=True)
-                    for i, output in enumerate(outputs):
-                        # Loss básica: regularização L2 das predições
-                        l2_loss = (output ** 2).mean() * 0.001
-                        loss = loss + l2_loss
-                        
-                    epoch_loss = torch.tensor(1.0 / (epoch + 1), device=device, requires_grad=True)
-                    loss = loss + epoch_loss
-                    
-                    print(f"Simplified loss: {loss.item():.6f}")
-
+                    loss, loss_items = criterion(outputs, targets)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 outputs, strides = model(images)
-                loss, _ = criterion(outputs, targets)
+                loss, loss_items = criterion(outputs, targets)
                 loss.backward()
                 optimizer.step()
             
