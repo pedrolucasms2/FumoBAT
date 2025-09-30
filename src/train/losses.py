@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=False, eps=1e-7):
     """Calculate IoU variants including EIoU."""
     # Get the coordinates of bounding boxes
@@ -58,6 +59,7 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=Fal
         
     return iou
 
+
 class FocalEIoULoss(nn.Module):
     """
     Focal-EIoU Loss implementation based on the paper:
@@ -90,6 +92,7 @@ class FocalEIoULoss(nn.Module):
         
         return focal_eiou_loss.mean()
 
+
 class SmallObjectYOLOLoss(nn.Module):
     """
     Loss YOLO REAL com Focal-EIoU para Small Objects
@@ -106,7 +109,7 @@ class SmallObjectYOLOLoss(nn.Module):
         self.focal_eiou = FocalEIoULoss(gamma=focal_gamma)
         
         # Loss weights otimizados para objetos pequenos
-        self.lambda_box = 0.1    # Aumentado para objetos pequenos
+        self.lambda_box = 0.1   # Aumentado para objetos pequenos
         self.lambda_obj = 1.0
         self.lambda_cls = 0.5
         
@@ -122,58 +125,67 @@ class SmallObjectYOLOLoss(nn.Module):
         tcls, tbox, indices, anchors = [], [], [], []
         
         for i, pred in enumerate(predictions):
+            device = pred.device
             B, _, H, W = pred.shape
-            anchors_i = self.anchors[i].to(pred.device)
+            anchors_i = self.anchors[i].to(device)
             
             # Initialize
-            tcls_i = torch.zeros(B, 3, H, W, device=pred.device, dtype=torch.long)
-            tbox_i = torch.zeros(B, 3, H, W, 4, device=pred.device)
-            indices_i = (torch.zeros(0, device=pred.device, dtype=torch.long),
-                        torch.zeros(0, device=pred.device, dtype=torch.long),
-                        torch.zeros(0, device=pred.device, dtype=torch.long),
-                        torch.zeros(0, device=pred.device, dtype=torch.long))
+            tcls_i = torch.zeros(B, 3, H, W, device=device, dtype=torch.long)
+            tbox_i = torch.zeros(B, 3, H, W, 4, device=device)
             
+            # Create empty lists to gather indices for this prediction scale
+            b_indices, a_indices, gj_indices, gi_indices = [], [], [], []
+
             if len(targets) > 0:
                 # Process targets for this scale
                 for b, target in enumerate(targets):
                     if 'boxes' in target and len(target['boxes']) > 0:
-                        boxes = target['boxes']  # [N, 4] in format [x_center, y_center, w, h]
-                        labels = target['labels'] if 'labels' in target else torch.zeros(len(boxes), dtype=torch.long)
+                        # --- FIX: Move target tensors to the correct device ---
+                        boxes = target['boxes'].to(device)
+                        labels = target['labels'].to(device) if 'labels' in target else torch.zeros(len(boxes), dtype=torch.long, device=device)
                         
                         # Scale boxes to grid
                         boxes_scaled = boxes.clone()
                         boxes_scaled[:, [0, 2]] *= W  # x, w
                         boxes_scaled[:, [1, 3]] *= H  # y, h
                         
-                        # Find grid cells
-                        gxy = boxes_scaled[:, :2]  # grid xy
                         gwh = boxes_scaled[:, 2:4]  # grid wh
                         
-                        # Grid indices
-                        gi = gxy[:, 0].long().clamp(0, W-1)  # grid x
-                        gj = gxy[:, 1].long().clamp(0, H-1)  # grid y
-                        
-                        # Select anchors based on IoU
-                        anchor_ious = []
-                        for a_idx, anchor in enumerate(anchors_i):
-                            # Calculate IoU between target and anchor
-                            anchor_box = torch.cat([torch.zeros(2, device=anchor.device), anchor])  # [0, 0, w, h]
-                            target_box = torch.cat([torch.zeros(2, device=gwh.device), gwh[0]])
-                            iou = bbox_iou(anchor_box.unsqueeze(0), target_box.unsqueeze(0), xywh=True).item()
-                            anchor_ious.append(iou)
-                        
-                        # Best anchor for each target
-                        best_anchor = torch.tensor(anchor_ious).argmax()
-                        
-                        # Assign targets
-                        if len(boxes) > 0:
-                            # Take first target for simplicity
-                            tcls_i[b, best_anchor, gj[0], gi[0]] = labels[0]
-                            tbox_i[b, best_anchor, gj[0], gi[0]] = boxes[0]
-                            
-                            # Store indices
-                            indices_i = (torch.tensor([b]), torch.tensor([best_anchor]), 
-                                       torch.tensor([gj[0]]), torch.tensor([gi[0]]))
+                        # Check if there are any ground truth boxes
+                        if gwh.shape[0] > 0:
+                            # Calculate IoU between all targets and all anchors for this scale
+                            # Expand dims to broadcast: [N, 1, 2] vs [1, A, 2] -> [N, A, 2]
+                            iou_matrix = bbox_iou(
+                                torch.cat([torch.zeros_like(gwh).unsqueeze(1), gwh.unsqueeze(1)], dim=-1).repeat(1, len(anchors_i), 1),
+                                torch.cat([torch.zeros_like(anchors_i).unsqueeze(0), anchors_i.unsqueeze(0)], dim=-1).repeat(gwh.shape[0], 1, 1),
+                                xywh=True
+                            )
+                            # Get the best anchor for each target box
+                            best_anchors_for_targets = iou_matrix.argmax(dim=1)
+
+                            # Assign targets to grid cells
+                            for t_idx, best_anchor in enumerate(best_anchors_for_targets):
+                                gxy = boxes_scaled[t_idx, :2]
+                                gi = gxy[0].long().clamp(0, W-1)
+                                gj = gxy[1].long().clamp(0, H-1)
+
+                                # Assign targets
+                                tcls_i[b, best_anchor, gj, gi] = labels[t_idx]
+                                tbox_i[b, best_anchor, gj, gi] = boxes[t_idx]
+
+                                # Store indices
+                                b_indices.append(b)
+                                a_indices.append(best_anchor)
+                                gj_indices.append(gj)
+                                gi_indices.append(gi)
+
+            # Convert collected indices to tensors
+            indices_i = (
+                torch.tensor(b_indices, device=device, dtype=torch.long),
+                torch.tensor(a_indices, device=device, dtype=torch.long),
+                torch.stack(gj_indices).long() if gj_indices else torch.tensor([], device=device, dtype=torch.long),
+                torch.stack(gi_indices).long() if gi_indices else torch.tensor([], device=device, dtype=torch.long)
+            )
             
             tcls.append(tcls_i)
             tbox.append(tbox_i)
@@ -208,36 +220,40 @@ class SmallObjectYOLOLoss(nn.Module):
             # Objectness targets
             tobj = torch.zeros_like(pred[..., 4], device=device)
             
-            if len(b_idx) > 0:
+            if b_idx.numel() > 0:
                 # Select predictions for positive samples
                 pred_subset = pred[b_idx, a_idx, gj, gi] # [N, features]
                 
                 # Box predictions (x, y, w, h)
                 pred_xy = torch.sigmoid(pred_subset[:, :2])  # xy
                 pred_wh = pred_subset[:, 2:4]  # wh (will be exp transformed)
-                pred_obj = pred_subset[:, 4]   # objectness
                 
                 # Box targets
                 target_boxes = tbox[i][b_idx, a_idx, gj, gi]  # [N, 4]
-                target_xy = target_boxes[:, :2]
-                target_wh = target_boxes[:, 2:4]
                 
-                # Box loss (using Focal-EIoU)
-                if len(pred_subset) > 0:
-                    # Convert to xyxy format for IoU calculation
-                    pred_boxes_xyxy = torch.cat([
-                        pred_xy - torch.exp(pred_wh) * anchors[i][a_idx] / 2,
-                        pred_xy + torch.exp(pred_wh) * anchors[i][a_idx] / 2
-                    ], dim=1)
-                    
-                    target_boxes_xyxy = torch.cat([
-                        target_xy - target_wh / 2,
-                        target_xy + target_wh / 2  
-                    ], dim=1)
-                    
-                    # Apply Focal-EIoU loss
-                    box_loss += self.focal_eiou(pred_boxes_xyxy, target_boxes_xyxy)
+                # Transform predicted boxes
+                # Note: This transformation depends on your model's output interpretation
+                # Assuming YOLOv3/v5 style prediction for w, h
+                anchor_wh = anchors[i][a_idx]
+                pred_w_transformed = torch.exp(pred_wh[:, 0]) * anchor_wh[:, 0]
+                pred_h_transformed = torch.exp(pred_wh[:, 1]) * anchor_wh[:, 1]
+                pred_box_transformed = torch.stack([pred_xy[:, 0], pred_xy[:, 1], pred_w_transformed, pred_h_transformed], dim=1)
+
+                # Convert to xyxy format for IoU calculation
+                # Box format is center_x, center_y, width, height
+                pred_boxes_xyxy = torch.cat((
+                    pred_box_transformed[:, :2] - pred_box_transformed[:, 2:] / 2,
+                    pred_box_transformed[:, :2] + pred_box_transformed[:, 2:] / 2
+                ), 1)
+
+                target_boxes_xyxy = torch.cat((
+                    target_boxes[:, :2] - target_boxes[:, 2:] / 2,
+                    target_boxes[:, :2] + target_boxes[:, 2:] / 2
+                ), 1)
                 
+                # Apply Focal-EIoU loss
+                box_loss += self.focal_eiou(pred_boxes_xyxy, target_boxes_xyxy)
+            
                 # Objectness targets (set to 1 for positive samples)
                 tobj[b_idx, a_idx, gj, gi] = 1.0
                 
@@ -248,7 +264,7 @@ class SmallObjectYOLOLoss(nn.Module):
                     
                     # One-hot encoding
                     target_cls_onehot = torch.zeros_like(pred_cls)
-                    target_cls_onehot[range(len(target_cls)), target_cls] = 1.0
+                    target_cls_onehot.scatter_(1, target_cls.unsqueeze(1), 1.0)
                     
                     cls_loss += self.bce_cls(pred_cls, target_cls_onehot)
             
@@ -257,8 +273,8 @@ class SmallObjectYOLOLoss(nn.Module):
         
         # Combine losses
         total_loss = (self.lambda_box * box_loss + 
-                     self.lambda_obj * obj_loss + 
-                     self.lambda_cls * cls_loss)
+                      self.lambda_obj * obj_loss + 
+                      self.lambda_cls * cls_loss)
         
         # Return loss components
         loss_items = torch.stack([box_loss, obj_loss, cls_loss, total_loss]).detach()
