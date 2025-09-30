@@ -1,33 +1,59 @@
-# src/models/model.py
+# src/models/optimal_model.py
 import torch
 import torch.nn as nn
 from .blocks import ConvBNAct, RFCBAMDownsample, C2f_PIG, CAA, DySample, FRM, ObjectRelationModule
 
-class DetectHead(nn.Module):
+class DecoupledDetectHead(nn.Module):
     """
-    A unified detection head for YOLO-style models.
-
-    This head is designed to output a single tensor per detection scale, which is
-    what the loss function expects. It predicts bounding box regression, objectness,
-    and class probabilities in a single convolutional layer.
+    An improved, decoupled detection head.
+    
+    This head separates the classification and regression tasks into different
+    branches, which can lead to improved performance by resolving the conflict
+    between these two competing tasks.
     """
     def __init__(self, in_channels, num_classes, num_anchors=3):
         super().__init__()
-        # Calculate the total number of output channels. For each of the `num_anchors`
-        # anchors, we predict 4 bbox coordinates, 1 objectness score, and `num_classes`
-        # class probabilities.
-        out_channels = num_anchors * (5 + num_classes)
         
-        # A stem layer to process input features before the final prediction.
-        mid_channels = max(64, in_channels // 2)
-        self.stem = ConvBNAct(in_channels, mid_channels, 1, 1)
+        # A common stem to process features before they are sent to the branches.
+        self.stem = ConvBNAct(in_channels, in_channels, 1, 1)
         
-        # The final convolutional layer that produces the predictions.
-        self.predictor = nn.Conv2d(mid_channels, out_channels, 1)
+        # --- Classification Branch ---
+        # A small stack of convolutional layers dedicated to learning classification features.
+        self.cls_convs = nn.Sequential(
+            ConvBNAct(in_channels, in_channels, 3, 1),
+            ConvBNAct(in_channels, in_channels, 3, 1),
+        )
+        # Final predictor for class scores.
+        self.cls_pred = nn.Conv2d(in_channels, num_anchors * num_classes, 1)
+        
+        # --- Regression Branch ---
+        # A separate stack for learning bounding box regression features.
+        self.reg_convs = nn.Sequential(
+            ConvBNAct(in_channels, in_channels, 3, 1),
+            ConvBNAct(in_channels, in_channels, 3, 1)
+        )
+        # Predictor for bounding box coordinates.
+        self.reg_pred = nn.Conv2d(in_channels, num_anchors * 4, 1)
+        # Predictor for the objectness score (whether an object is present).
+        self.obj_pred = nn.Conv2d(in_channels, num_anchors * 1, 1)
 
     def forward(self, x):
-        # Pass the input through the stem and then the predictor.
-        return self.predictor(self.stem(x))
+        # 1. Pass input through the common stem.
+        x_stem = self.stem(x)
+        
+        # 2. Process features in parallel through the classification and regression branches.
+        cls_feat = self.cls_convs(x_stem)
+        reg_feat = self.reg_convs(x_stem)
+        
+        # 3. Get the final predictions from each branch.
+        cls_output = self.cls_pred(cls_feat)
+        reg_output = self.reg_pred(reg_feat)
+        obj_output = self.obj_pred(reg_feat)
+        
+        # 4. Concatenate the outputs in the standard YOLO order [reg, obj, cls].
+        # The loss function expects this specific channel ordering.
+        return torch.cat([reg_output, obj_output, cls_output], dim=1)
+
 
 class BSSIFPN(nn.Module):
     def __init__(self, c1, c2, c3, c4):
@@ -102,9 +128,10 @@ class SmallObjectYOLO(nn.Module):
         self.relation_p3 = ObjectRelationModule(c_in=c3) # 256 canais
         self.relation_p4 = ObjectRelationModule(c_in=c3) # 256 canais (saída do neck para p4 é c3)
 
-        self.head_p2 = DetectHead(c2, nc)  # 128 canais
-        self.head_p3 = DetectHead(c3, nc)  # 256 canais  
-        self.head_p4 = DetectHead(c3, nc)  # 256 canais
+        # --- Use the new DecoupledDetectHead for potentially better results ---
+        self.head_p2 = DecoupledDetectHead(c2, nc)  # 128 canais
+        self.head_p3 = DecoupledDetectHead(c3, nc)  # 256 canais  
+        self.head_p4 = DecoupledDetectHead(c3, nc)  # 256 canais
         
         self.strides = torch.tensor([8., 16., 32.])
 
@@ -127,9 +154,3 @@ class SmallObjectYOLO(nn.Module):
         out_p4 = self.head_p4(P4_rel)
 
         return [out_p2, out_p3, out_p4], self.strides.to(x.device)
-
-if __name__ == "__main__":
-    m = SmallObjectYOLO(nc=2)
-    y, s = m(torch.randn(1, 3, 640, 640))
-    print([t.shape for t in y], s)
-
