@@ -339,7 +339,7 @@ def enhanced_train(
     
     # Loss, Optimizer, Scheduler, etc.
     criterion = SmallObjectLoss(nc=nc, device=device, focal_gamma=0.5)
-    optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=5e-4)
+    optimizer = torch.optim.AdamW([{'params': model.parameters()}], lr=lr, weight_decay=1e-3)
     scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=epochs, base_lr=lr, min_lr=lr * 0.01)
     scaler = GradScaler() if device == 'cuda' else None
     early_stopping = EarlyStopping(patience=30, min_delta=0.001)
