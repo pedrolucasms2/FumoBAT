@@ -122,59 +122,66 @@ def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, traini
 
 def calculate_metrics(predictions, targets, iou_threshold=0.5):
     """Calculates precision, recall, and F1 score."""
-    true_positives, pred_scores, pred_labels = [], [], []
+    true_positives = 0
+    num_preds = 0
     total_targets = 0
-    
+
     # Iterate over each image in the batch
     for i, (preds, target) in enumerate(zip(predictions, targets)):
         target_boxes = target['boxes']
         target_labels = target['labels']
         total_targets += len(target_labels)
+        num_preds += len(preds)
 
-        if len(preds) == 0:
+        if len(preds) == 0 or len(target_boxes) == 0:
             continue
-            
-        if len(target_boxes) == 0:
-            # All predictions are false positives
-            true_positives.extend([0] * len(preds))
-            continue
+
+        # Keep track of which ground truth boxes have been detected
+        detected = torch.zeros(target_boxes.shape[0], dtype=torch.bool, device=preds.device)
 
         # Match predictions to targets
-        correct = torch.zeros(preds.shape[0], dtype=torch.bool, device=preds.device)
-        detected = torch.zeros(target_boxes.shape[0], dtype=torch.bool, device=preds.device)
-        
-        # Convert target boxes to xyxy
-        tbox_xyxy = torch.cat((
-            target_boxes[:, :2] - target_boxes[:, 2:] / 2,
-            target_boxes[:, :2] + target_boxes[:, 2:] / 2
-        ), 1)
-
         for j, pred in enumerate(preds):
             pred_box = pred[:4]
             pred_label = pred[5]
-            
-            # Find matching class labels
+
+            # Find matching class labels in the targets
             class_mask = (target_labels == pred_label)
             if not class_mask.any():
                 continue
-            
-            # Calculate IoU
-            overlaps = bbox_iou(pred_box.unsqueeze(0), tbox_xyxy[class_mask], xywh=False)
-            best_overlap, best_idx = overlaps.max(1)
-            
-            if best_overlap > iou_threshold and not detected[class_mask][best_idx]:
-                correct[j] = True
-                detected[class_mask][best_idx] = True
-        
-        true_positives.extend(correct.cpu().numpy().tolist())
+
+            # Get the ground truth boxes and their original indices for the matching class
+            matching_target_boxes = target_boxes[class_mask]
+            matching_target_indices = torch.where(class_mask)[0]
+
+            # Convert target boxes to xyxy for IoU calculation
+            tbox_xyxy = torch.cat((
+                matching_target_boxes[:, :2] - matching_target_boxes[:, 2:] / 2,
+                matching_target_boxes[:, :2] + matching_target_boxes[:, 2:] / 2
+            ), 1)
+
+            # Calculate IoU between the current prediction and all matching targets
+            overlaps = bbox_iou(pred_box.unsqueeze(0), tbox_xyxy, xywh=False).squeeze(0)
+
+            if overlaps.numel() == 0:
+                continue
+
+            # Find the best match
+            best_overlap, best_idx = overlaps.max(0)
+
+            # 🚨 CORREÇÃO AQUI 🚨
+            # Use .item() to get scalar values for the condition
+            # And check if the best matching GT box hasn't been detected yet
+            original_target_idx = matching_target_indices[best_idx]
+            if best_overlap.item() > iou_threshold and not detected[original_target_idx]:
+                true_positives += 1
+                detected[original_target_idx] = True # Mark this GT box as detected
 
     # Calculate metrics
-    tp = np.sum(true_positives)
-    fp = len(true_positives) - tp
-    fn = total_targets - tp
-    
-    precision = tp / (tp + fp + 1e-16)
-    recall = tp / (total_targets + 1e-16)
+    fp = num_preds - true_positives
+    fn = total_targets - true_positives
+
+    precision = true_positives / (num_preds + 1e-16)
+    recall = true_positives / (total_targets + 1e-16)
     f1 = 2 * (precision * recall) / (precision + recall + 1e-16)
 
     return {'precision': precision, 'recall': recall, 'f1': f1}
