@@ -91,24 +91,23 @@ def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, traini
 
     path = data['path']
     nc = data['nc']
-    class_names = data['names']
     
-    # Determine whether to use train or val set
     split = 'train' if training else 'val'
     
-    # Construct the full paths to the image and label directories
+    # --- LÓGICA FINAL E ROBUSTA ---
+    # Lê o caminho relativo das imagens diretamente do data.yaml
+    # Ex: data['train'] é 'images/train'
     img_dir = os.path.join(path, data[split])
-    # This assumes a standard YOLO directory structure where 'labels' is parallel to 'images'
+    
+    # Deriva o caminho dos labels a partir do caminho das imagens
+    # Isso assume que a estrutura é a mesma, trocando 'images' por 'labels'
     label_dir = img_dir.replace('images', 'labels')
 
-    # Initialize your augmentation pipeline
+    # O resto da função continua igual...
     transforms = SmallObjectAugmentationPipeline(img_size=img_size, training=training)
     
-    # --- CORRECTION APPLIED HERE ---
-    # Create the dataset with the correct arguments
     dataset = SmallObjectDataset(img_dir=img_dir, label_dir=label_dir, transforms=transforms)
     
-    # Create the DataLoader
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
