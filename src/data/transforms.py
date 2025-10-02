@@ -150,21 +150,53 @@ class MultiScaleTransforms:
 
         return transforms(image=image, bboxes=bboxes, class_labels=class_labels)
 class SmallObjectAugmentationPipeline:
-    """Simplified augmentation pipeline for debugging"""
-    def __init__(self, img_size=640, training=True):
+    """
+    Pipeline de augmentation AGRESSIVO para combater overfitting em datasets pequenos.
+    """
+    def __init__(self, img_size=1024, training=True):
         self.img_size = img_size
         self.training = training
         
-        # Transformações básicas e estáveis
-        self.transforms = A.Compose([
-            A.Resize(height=img_size, width=img_size),
-            A.HorizontalFlip(p=0.5),
-            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ToTensorV2(),
-        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+        if training:
+            # --- Pipeline de Treinamento Agressivo ---
+            self.transforms = A.Compose([
+                # Transformações espaciais para variar a posição e o ângulo
+                A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.75, 1.0), p=0.8),
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.RandomRotate90(p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.7, border_mode=cv2.BORDER_CONSTANT),
+
+                # Transformações de cor e brilho para simular diferentes condições de iluminação
+                A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1, p=0.8),
+                A.ToGray(p=0.1),
+                A.RandomGamma(p=0.2),
+
+                # Adição de "ruído" para tornar o modelo mais robusto
+                A.OneOf([
+                    A.GaussNoise(p=0.5),
+                    A.ISONoise(p=0.5),
+                ], p=0.3),
+                
+                A.OneOf([
+                    A.MotionBlur(p=0.5),
+                    A.MedianBlur(blur_limit=3, p=0.5),
+                    A.Blur(blur_limit=3, p=0.5),
+                ], p=0.4),
+
+                # Normalizar e converter para Tensor (sempre no final)
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+            ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1))
+        else:
+            # --- Pipeline de Validação (sem augmentation) ---
+            self.transforms = A.Compose([
+                A.Resize(height=img_size, width=img_size),
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+            ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
 
     def __call__(self, sample=None, **kwargs):
-        # Já sabemos que o sample tem ['image', 'bboxes', 'class_labels']
         if sample is not None:
             image = sample['image']
             boxes = sample['bboxes'] 
@@ -174,27 +206,20 @@ class SmallObjectAugmentationPipeline:
             boxes = kwargs.get("boxes", [])
             labels = kwargs.get("labels", [])
         
-        # Verificar se temos dados válidos
-        if image is None:
-            return {
-                "image": torch.zeros((3, self.img_size, self.img_size)),
-                "boxes": [],
-                "labels": []
-            }
-        
         class_labels = labels.tolist() if isinstance(labels, np.ndarray) else list(labels)
         
         try:
             result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
+            # Certifique-se de que os tensores retornados tenham o tipo de dado correto
             return {
                 "image": result["image"], 
-                "boxes": result["bboxes"], 
-                "labels": result["class_labels"]
+                "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32), 
+                "labels": torch.as_tensor(result["class_labels"], dtype=torch.long)
             }
         except Exception as e:
-            print(f"Error in transforms: {e}")
+            print(f"Erro no pipeline de transformações: {e}. Retornando tensor vazio.")
             return {
-                "image": torch.zeros((3, self.img_size, self.img_size)),
-                "boxes": [],
-                "labels": []
+                "image": torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32),
+                "boxes": torch.empty((0, 4), dtype=torch.float32),
+                "labels": torch.empty((0,), dtype=torch.long)
             }
