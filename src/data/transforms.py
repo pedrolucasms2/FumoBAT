@@ -212,16 +212,35 @@ class SmallObjectAugmentationPipeline:
         class_labels = labels.tolist() if isinstance(labels, np.ndarray) else list(labels)
         
         try:
+            # Aplica o pipeline de transformações completo
             result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
+
+            # Garante que os tensores retornados tenham o tipo de dado correto
             return {
                 "image": result["image"], 
                 "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32), 
                 "labels": torch.as_tensor(result["class_labels"], dtype=torch.long)
             }
         except Exception as e:
-            print(f"Erro no pipeline de transformações: {e}. Retornando tensor vazio.")
+            # 
+            # 🔧 CORREÇÃO APLICADA AQUI 🔧
+            # Se a augmentation falhar (ex: remover todos os bboxes), 
+            # ainda assim redimensionamos a imagem original antes de retorná-la.
+            # 
+            print(f"Aviso: Augmentation falhou para uma imagem ({e}). Usando imagem original redimensionada.")
+            
+            # Cria um pipeline de fallback simples
+            fallback_transforms = A.Compose([
+                A.Resize(height=self.img_size, width=self.img_size),
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+            ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+            
+            # Aplica o fallback e retorna os dados originais, mas com o tamanho correto
+            result = fallback_transforms(image=image, bboxes=boxes, class_labels=class_labels)
+
             return {
-                "image": torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32),
-                "boxes": torch.empty((0, 4), dtype=torch.float32),
-                "labels": torch.empty((0,), dtype=torch.long)
+                "image": result["image"], 
+                "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32), 
+                "labels": torch.as_tensor(result["class_labels"], dtype=torch.long)
             }
