@@ -160,19 +160,22 @@ class SmallObjectAugmentationPipeline:
         if training:
             # --- Pipeline de Treinamento Agressivo ---
             self.transforms = A.Compose([
-                # Transformações espaciais para variar a posição e o ângulo
-                A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.75, 1.0), p=0.8),
+                # 
+                # 🔧 CORREÇÃO APLICADA AQUI 🔧
+                # 'height' e 'width' foram combinados no argumento 'size'
+                A.RandomResizedCrop(size=(img_size, img_size), scale=(0.75, 1.0), p=0.8),
+                
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
                 A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.7, border_mode=cv2.BORDER_CONSTANT),
 
-                # Transformações de cor e brilho para simular diferentes condições de iluminação
+                # Transformações de cor e brilho
                 A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1, p=0.8),
                 A.ToGray(p=0.1),
                 A.RandomGamma(p=0.2),
 
-                # Adição de "ruído" para tornar o modelo mais robusto
+                # Adição de "ruído"
                 A.OneOf([
                     A.GaussNoise(p=0.5),
                     A.ISONoise(p=0.5),
@@ -184,12 +187,12 @@ class SmallObjectAugmentationPipeline:
                     A.Blur(blur_limit=3, p=0.5),
                 ], p=0.4),
 
-                # Normalizar e converter para Tensor (sempre no final)
+                # Normalizar e converter para Tensor
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1))
         else:
-            # --- Pipeline de Validação (sem augmentation) ---
+            # --- Pipeline de Validação ---
             self.transforms = A.Compose([
                 A.Resize(height=img_size, width=img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -210,7 +213,6 @@ class SmallObjectAugmentationPipeline:
         
         try:
             result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
-            # Certifique-se de que os tensores retornados tenham o tipo de dado correto
             return {
                 "image": result["image"], 
                 "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32), 
