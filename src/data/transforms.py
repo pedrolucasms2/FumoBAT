@@ -158,13 +158,10 @@ class SmallObjectAugmentationPipeline:
         self.training = training
         
         if training:
-            # --- Pipeline de Treinamento Agressivo ---
+            # --- Pipeline de Treinamento Agressivo Corrigido ---
             self.transforms = A.Compose([
-                # 
-                # 🔧 CORREÇÃO APLICADA AQUI 🔧
-                # 'height' e 'width' foram combinados no argumento 'size'
+                # Transformações espaciais
                 A.RandomResizedCrop(size=(img_size, img_size), scale=(0.75, 1.0), p=0.8),
-                
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
@@ -186,18 +183,25 @@ class SmallObjectAugmentationPipeline:
                     A.MedianBlur(blur_limit=3, p=0.5),
                     A.Blur(blur_limit=3, p=0.5),
                 ], p=0.4),
+                
+                # 
+                # 🔧 GARANTIA DE TAMANHO ADICIONADA AQUI 🔧
+                # Esta linha força todas as imagens a terem o tamanho final correto, 
+                # mesmo que o RandomResizedCrop seja pulado.
+                A.Resize(height=img_size, width=img_size),
 
-                # Normalizar e converter para Tensor
+                # Normalizar e converter para Tensor (sempre no final)
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1))
         else:
-            # --- Pipeline de Validação ---
+            # --- Pipeline de Validação (sempre esteve correto) ---
             self.transforms = A.Compose([
                 A.Resize(height=img_size, width=img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
 
     def __call__(self, sample=None, **kwargs):
         if sample is not None:
