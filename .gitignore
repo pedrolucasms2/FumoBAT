@@ -41,3 +41,6 @@ Thumbs.db
 # Conda/pip
 *.egg
 *.wheel
+
+#Dataset
+datasets/
