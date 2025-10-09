@@ -58,58 +58,58 @@ class DecoupledDetectHead(nn.Module):
 class BSSIFPN(nn.Module):
     def __init__(self, c1, c2, c3, c4):
         super().__init__()
-        # Padronize todos os canais para c3 (256) para simplicidade
+        # Normalize all channels to c3 (256) for simplicity
         self.b1_ref = ConvBNAct(c1, c3, 1, 1)  # 64->256
         self.b2_ref = ConvBNAct(c2, c3, 1, 1)  # 128->256
         self.p4_lat = ConvBNAct(c4, c3, 1, 1)  # 384->256
         self.p3_lat = ConvBNAct(c3, c3, 1, 1)  # 256->256
-        self.p2_lat = ConvBNAct(c3, c3, 1, 1)  # 256->256 (após B2 ref)
+        self.p2_lat = ConvBNAct(c3, c3, 1, 1)  # 256->256 (after B2 ref)
         
-        # Upsampling dinâmico
+        # Dynamic upsampling
         self.up4 = DySample(c3, scale=2)
         self.up3 = DySample(c3, scale=2)
         
-        # FRMs com canais compatíveis (todos c3=256)
+        # FRMs with compatible channels (all c3 = 256)
         self.frm3 = FRM(c3, c3)  # up=256, skip=256
         self.frm2 = FRM(c3, c3)  # up=256, skip=256
         
-        # Injeção B1 em P2
+        # Inject B1 into P2
         self.b1_to_p2 = ConvBNAct(c3, c3, 3, 2)  # 256->256
         
-        # Bottom-up path adicional
+        # Additional bottom-up path
         self.down_p2 = ConvBNAct(c3, c3, 3, 2)  # 256->256
         self.frm_bu_p3 = FRM(c3, c3)  # up=256, skip=256
         self.down_p3 = ConvBNAct(c3, c3, 3, 2)  # 256->256
         self.frm_bu_p4 = FRM(c3, c3)  # up=256, skip=256
         
-        # Saídas finais - ajuste para as necessidades das cabeças
-        self.out2 = ConvBNAct(c3, c2, 3, 1)  # 256->128 para P2
-        self.out3 = ConvBNAct(c3, c3, 3, 1)  # 256->256 para P3
-        self.out4 = ConvBNAct(c3, c3, 3, 1)  # 256->256 para P4
+        # Final outputs - adjust to the heads' channel requirements
+        self.out2 = ConvBNAct(c3, c2, 3, 1)  # 256->128 for P2
+        self.out3 = ConvBNAct(c3, c3, 3, 1)  # 256->256 for P3
+        self.out4 = ConvBNAct(c3, c3, 3, 1)  # 256->256 for P4
 
     def forward(self, B1, B2, B3, B4):
-        # Padronizar todos para c3 (256 canais)
+        # Normalize everything to c3 (256 channels)
         B1r = self.b1_ref(B1)  # 64->256
         B2r = self.b2_ref(B2)  # 128->256
         B3r = self.p3_lat(B3)  # 256->256
         B4r = self.p4_lat(B4)  # 384->256
         
         # Top-down path
-        P4 = B4r  # 256 canais
+        P4 = B4r  # 256 channels
         P3 = self.frm3(self.up4(P4), B3r)  # 256+256
         P2 = self.frm2(self.up3(P3), self.p2_lat(B2r))  # 256+256
         
-        # Injeção B1
+        # Inject B1
         P2 = self.frm2(P2, self.b1_to_p2(B1r))  # 256+256
         
-        # Bottom-up path adicional
+        # Additional bottom-up path
         D3 = self.down_p2(P2)  # 256
         P3 = self.frm_bu_p3(P3, D3)  # 256+256
         
         D4 = self.down_p3(P3)  # 256
         P4 = self.frm_bu_p4(P4, D4)  # 256+256
         
-        # Ajustar canais de saída conforme necessário
+        # Adjust output channels as needed
         return self.out2(P2), self.out3(P3), self.out4(P4)
 
 class SmallObjectYOLO(nn.Module):
@@ -124,14 +124,14 @@ class SmallObjectYOLO(nn.Module):
         self.caa = CAA(c4, k=9)
         self.neck = BSSIFPN(c1, c2, c3, c4)
 
-        self.relation_p2 = ObjectRelationModule(c_in=c2) # 128 canais
-        self.relation_p3 = ObjectRelationModule(c_in=c3) # 256 canais
-        self.relation_p4 = ObjectRelationModule(c_in=c3) # 256 canais (saída do neck para p4 é c3)
+        self.relation_p2 = ObjectRelationModule(c_in=c2) # 128 channels
+        self.relation_p3 = ObjectRelationModule(c_in=c3) # 256 channels
+        self.relation_p4 = ObjectRelationModule(c_in=c3) # 256 channels (neck output for P4 is c3)
 
         # --- Use the new DecoupledDetectHead for potentially better results ---
-        self.head_p2 = DecoupledDetectHead(c2, nc)  # 128 canais
-        self.head_p3 = DecoupledDetectHead(c3, nc)  # 256 canais  
-        self.head_p4 = DecoupledDetectHead(c3, nc)  # 256 canais
+        self.head_p2 = DecoupledDetectHead(c2, nc)  # 128 channels
+        self.head_p3 = DecoupledDetectHead(c3, nc)  # 256 channels  
+        self.head_p4 = DecoupledDetectHead(c3, nc)  # 256 channels
         
         self.strides = torch.tensor([8., 16., 32.])
 

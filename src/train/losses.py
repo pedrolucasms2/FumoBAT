@@ -5,7 +5,6 @@ import math
 
 
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=False, eps=1e-7):
-    """Calculate IoU variants including EIoU."""
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
         (x1, y1, w1, h1), (x2, y2, w2, h2) = box1.chunk(4, -1), box2.chunk(4, -1)
@@ -33,7 +32,6 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=Fal
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
         
         if EIoU:
-            # EIoU Implementation from the paper
             # Distance loss
             rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4
             c2 = cw ** 2 + ch ** 2 + eps
@@ -61,10 +59,6 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, EIoU=Fal
 
 
 class FocalEIoULoss(nn.Module):
-    """
-    Focal-EIoU Loss implementation based on the paper:
-    "Focal and Efficient IOU Loss for Accurate Bounding Box Regression"
-    """
     def __init__(self, alpha=1.0, gamma=0.5, eps=1e-7):
         super(FocalEIoULoss, self).__init__()
         self.alpha = alpha
@@ -72,12 +66,9 @@ class FocalEIoULoss(nn.Module):
         self.eps = eps
     
     def forward(self, pred, target):
-        """
-        Args:
-            pred: [N, 4] predicted boxes (x1, y1, x2, y2)
-            target: [N, 4] target boxes (x1, y1, x2, y2)
-        """
-        # Calculate EIoU
+        #pred: [N, 4] predicted boxes (x1, y1, x2, y2)
+        #target: [N, 4] target boxes (x1, y1, x2, y2)
+
         eiou = bbox_iou(pred, target, xywh=False, EIoU=True, eps=self.eps)
         
         # EIoU Loss
@@ -94,9 +85,6 @@ class FocalEIoULoss(nn.Module):
 
 
 class SmallObjectYOLOLoss(nn.Module):
-    """
-    Loss YOLO REAL com Focal-EIoU para Small Objects
-    """
     def __init__(self, nc=1, device='cpu', focal_gamma=0.5):
         super(SmallObjectYOLOLoss, self).__init__()
         self.nc = nc
@@ -108,12 +96,12 @@ class SmallObjectYOLOLoss(nn.Module):
         self.bce_obj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0], device=device))
         self.focal_eiou = FocalEIoULoss(gamma=focal_gamma)
         
-        # Loss weights otimizados para objetos pequenos
-        self.lambda_box = 0.1   # Aumentado para objetos pequenos
+        # Loss weights optimized for small objects
+        self.lambda_box = 0.1  
         self.lambda_obj = 1.0
         self.lambda_cls = 0.5
         
-        # Anchors para diferentes escalas (P3, P4, P5)
+        # Anchors for different scales (P3, P4, P5)
         self.anchors = [
             torch.tensor([[10, 13], [16, 30], [33, 23]], device=device, dtype=torch.float32) / 8,    # P3
             torch.tensor([[30, 61], [62, 45], [59, 119]], device=device, dtype=torch.float32) / 16,  # P4  
@@ -121,7 +109,6 @@ class SmallObjectYOLOLoss(nn.Module):
         ]
         
     def build_targets(self, predictions, targets):
-        """Constrói targets para cada escala de predição"""
         tcls, tbox, indices, anchors = [], [], [], []
         
         for i, pred in enumerate(predictions):
@@ -140,20 +127,19 @@ class SmallObjectYOLOLoss(nn.Module):
                 # Process targets for this scale
                 for b, target in enumerate(targets):
                     if 'boxes' in target and len(target['boxes']) > 0:
-                        # --- FIX: Move target tensors to the correct device ---
                         boxes = target['boxes'].to(device)
                         labels = target['labels'].to(device) if 'labels' in target else torch.zeros(len(boxes), dtype=torch.long, device=device)
                         
-                        # Scale boxes to grid
+                        # Scale boxes to the feature map grid
                         boxes_scaled = boxes.clone()
                         boxes_scaled[:, [0, 2]] *= W  # x, w
                         boxes_scaled[:, [1, 3]] *= H  # y, h
                         
                         gwh = boxes_scaled[:, 2:4]  # grid wh
                         
-                        # Check if there are any ground truth boxes
+                        # Check whether there are ground-truth boxes
                         if gwh.shape[0] > 0:
-                            # Calculate IoU between all targets and all anchors for this scale
+                            # Calculate IoU between all targets and anchors for this scale
                             # Expand dims to broadcast: [N, 1, 2] vs [1, A, 2] -> [N, A, 2]
                             iou_matrix = bbox_iou(
                                 torch.cat([torch.zeros_like(gwh).unsqueeze(1), gwh.unsqueeze(1)], dim=-1).repeat(1, len(anchors_i), 1),
@@ -195,7 +181,6 @@ class SmallObjectYOLOLoss(nn.Module):
         return tcls, tbox, indices, anchors
     
     def forward(self, predictions, targets):
-        """Forward pass com loss YOLO real"""
         device = predictions[0].device
         
         # Build targets
@@ -231,9 +216,7 @@ class SmallObjectYOLOLoss(nn.Module):
                 # Box targets
                 target_boxes = tbox[i][b_idx, a_idx, gj, gi]  # [N, 4]
                 
-                # Transform predicted boxes
-                # Note: This transformation depends on your model's output interpretation
-                # Assuming YOLOv3/v5 style prediction for w, h
+                # Transform predicted boxes        
                 anchor_wh = anchors[i][a_idx]
                 pred_w_transformed = torch.exp(pred_wh[:, 0]) * anchor_wh[:, 0]
                 pred_h_transformed = torch.exp(pred_wh[:, 1]) * anchor_wh[:, 1]

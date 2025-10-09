@@ -1,3 +1,5 @@
+import os
+import json
 import torch
 import torch.nn as nn
 import numpy as np
@@ -13,40 +15,33 @@ class SmallObjectEvaluator:
         self.num_classes = num_classes
         self.reset()
     
-    def reset(self):
-        """Reinicia as estatísticas"""
+    def reset(self):        
         self.all_detections = defaultdict(list)
         self.all_annotations = defaultdict(int)
         self.image_ids = []
     
     def add_batch(self, images, targets, image_ids=None):
-        """Adiciona um batch para avaliação"""
         self.model.eval()
         with torch.no_grad():
             images = images.to(self.device)
             predictions, strides = self.model(images)
-            
-            # Converter predições para formato final
+                        
             detections = self._parse_predictions(predictions, strides)
             
             for i, (detection, target) in enumerate(zip(detections, targets)):
                 img_id = image_ids[i] if image_ids else len(self.image_ids)
                 self.image_ids.append(img_id)
                 
-                # Processar ground truth
                 gt_boxes = target['boxes'].cpu()
                 gt_labels = target['labels'].cpu()
                 
-                # Contar anotações por classe
                 for label in gt_labels:
                     self.all_annotations[label.item()] += 1
                 
-                # Processar detecções
                 if len(detection['boxes']) > 0:
                     self._match_detections(detection, gt_boxes, gt_labels, img_id)
     
-    def _parse_predictions(self, predictions, strides):
-        """Converte predições raw em detecções finais"""
+    def _parse_predictions(self, predictions, strides):        
         batch_size = predictions[0].shape[0]
         detections = []
         
@@ -56,19 +51,18 @@ class SmallObjectEvaluator:
             all_labels = []
             
             for pred, stride in zip(predictions, strides):
-                # pred shape: [B, 5+nc, H, W] onde 5 = [x, y, w, h, obj]
+                # pred shape: [B, 5+nc, H, W] where 5 = [x, y, w, h, obj]
                 B, C, H, W = pred.shape
-                nc = C - 5  # número de classes
+                nc = C - 5  # class number
                 
                 pred_b = pred[b].permute(1, 2, 0).contiguous().view(-1, C)  # [H*W, C]
                 
-                # Extrair componentes
-                xy = pred_b[:, :2]  # centro x, y
-                wh = pred_b[:, 2:4]  # largura, altura
+                xy = pred_b[:, :2]  # center x, y
+                wh = pred_b[:, 2:4]  # width, height
                 obj_conf = pred_b[:, 4].sigmoid()
                 cls_conf = pred_b[:, 5:].sigmoid() if nc > 0 else torch.ones(pred_b.shape[0], 1)
                 
-                # Converter para coordenadas absolutas
+                # Convert to absolute coordinates
                 grid_y, grid_x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
                 grid = torch.stack([grid_x, grid_y], dim=-1).float().to(pred.device)
                 grid = grid.view(-1, 2)
@@ -76,12 +70,12 @@ class SmallObjectEvaluator:
                 xy = (xy.sigmoid() + grid) * stride
                 wh = wh.exp() * stride
                 
-                # Converter para formato x1,y1,x2,y2
+                # Converts to x1,y1,x2,y2 format
                 x1y1 = xy - wh / 2
                 x2y2 = xy + wh / 2
                 boxes = torch.cat([x1y1, x2y2], dim=1)
                 
-                # Scores finais
+                # Final scores
                 if nc == 1:
                     scores = obj_conf
                     labels = torch.zeros_like(scores).long()
@@ -91,7 +85,7 @@ class SmallObjectEvaluator:
                     scores = obj_conf * cls_scores
                     labels = cls_labels
                 
-                # Filtrar por confiança
+                # Confidence filter
                 keep = scores > 0.1
                 boxes = boxes[keep]
                 scores = scores[keep]
@@ -127,13 +121,12 @@ class SmallObjectEvaluator:
         return detections
     
     def _match_detections(self, detection, gt_boxes, gt_labels, img_id):
-        """Faz matching entre detecções e ground truth"""
         det_boxes = detection['boxes']
         det_scores = detection['scores']
         det_labels = detection['labels']
         
         for class_id in range(self.num_classes):
-            # Filtrar por classe
+            # Class filter
             gt_mask = gt_labels == class_id
             det_mask = det_labels == class_id
             
@@ -144,7 +137,6 @@ class SmallObjectEvaluator:
             if len(det_class_boxes) == 0:
                 continue
                 
-            # Ordenar por score
             sorted_inds = torch.argsort(det_class_scores, descending=True)
             det_class_boxes = det_class_boxes[sorted_inds]
             det_class_scores = det_class_scores[sorted_inds]
@@ -174,43 +166,40 @@ class SmallObjectEvaluator:
                 })
     
     def compute_ap(self, class_id, iou_threshold=0.5):
-        """Calcula AP para uma classe específica"""
         detections = self.all_detections[class_id]
         n_annotations = self.all_annotations[class_id]
         
         if len(detections) == 0 or n_annotations == 0:
             return 0.0, [], []
         
-        # Ordenar por score
+        # Score sort
         detections = sorted(detections, key=lambda x: x['score'], reverse=True)
         
         tp = np.array([d['tp'] for d in detections])
         fp = 1 - tp
         
-        # Acumular
         tp_cumsum = np.cumsum(tp)
         fp_cumsum = np.cumsum(fp)
         
-        # Calcular precision e recall
+        # Precision-recall
         precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-8)
         recall = tp_cumsum / n_annotations
         
-        # Suavizar curva precision-recall
+        # Precision-recall smoothing
         precision = np.concatenate([[1], precision, [0]])
         recall = np.concatenate([[0], recall, [1]])
         
-        # Interpolação
+        # Interpolation
         for i in range(len(precision) - 1, 0, -1):
             precision[i - 1] = max(precision[i - 1], precision[i])
         
-        # Calcular AP
         indices = np.where(recall[1:] != recall[:-1])[0] + 1
         ap = np.sum((recall[indices] - recall[indices - 1]) * precision[indices])
         
         return ap, precision[1:-1], recall[1:-1]
     
     def compute_map(self, iou_threshold=0.5):
-        """Calcula mAP para todas as classes"""
+        #MAP for all classes
         aps = []
         results = {}
         
@@ -228,32 +217,25 @@ class SmallObjectEvaluator:
         return results
     
     def compute_small_object_metrics(self):
-        """Calcula métricas específicas para objetos pequenos"""
-        # Implementar lógica específica para objetos pequenos
-        # Filtrar detecções e anotações por tamanho
         small_results = {}
         
         for class_id in range(self.num_classes):
             detections = self.all_detections[class_id]
             
-            # Filtrar objetos pequenos (área < 32²)
             small_detections = []
             small_annotations = 0
             
-            # Esta é uma implementação simplificada
-            # Na prática, você precisaria filtrar por tamanho real
-            small_detections = detections  # Por enquanto, considerar todos
+            small_detections = detections  
             small_annotations = self.all_annotations[class_id]
             
             if small_annotations > 0:
-                # Calcular AP para objetos pequenos
-                # ... implementar lógica similar ao compute_ap
+                # AP for small objects
+                # TBD
                 pass
         
         return small_results
     
     def plot_pr_curve(self, class_id=0, save_path=None):
-        """Plota curva Precision-Recall"""
         ap, precision, recall = self.compute_ap(class_id)
         
         plt.figure(figsize=(8, 6))
@@ -269,35 +251,26 @@ class SmallObjectEvaluator:
         plt.show()
     
     def print_summary(self):
-        """Imprime resumo da avaliação"""
         results = self.compute_map()
         
-        print("=" * 50)
-        print("AVALIAÇÃO DO MODELO - OBJETOS PEQUENOS")
-        print("=" * 50)
         print(f"mAP@0.5: {results['mAP']:.4f}")
         
         for class_id in range(self.num_classes):
             ap = results[f'AP_class_{class_id}']
             n_annotations = self.all_annotations[class_id]
             n_detections = len(self.all_detections[class_id])
-            print(f"Classe {class_id}: AP = {ap:.4f} | GT: {n_annotations} | Det: {n_detections}")
-        
-        print("=" * 50)
+            print(f"Class {class_id}: AP = {ap:.4f} | GT: {n_annotations} | Det: {n_detections}")        
         
     def save_results_to_json(self, results, save_path):
-        """Salva o dicionário de resultados em um arquivo JSON."""
-        # Converter arrays numpy para listas para serialização JSON
         for key, value in results.items():
             if isinstance(value, np.ndarray):
                 results[key] = value.tolist()
         
         with open(save_path, 'w') as f:
             json.dump(results, f, indent=4)
-        print(f"Resultados de avaliação salvos em: {save_path}")
+        print(f"Results saved at: {save_path}")
         
     def save_sample_images(self, loader, class_names, save_dir, num_images=10):
-        """Salva imagens de exemplo com detecções e ground truth."""
         import cv2
         os.makedirs(save_dir, exist_ok=True)
         self.model.eval()
@@ -310,25 +283,25 @@ class SmallObjectEvaluator:
                 
                 images = images.to(self.device)
                 predictions, _ = self.model(images)
-                detections = self._parse_predictions(predictions, [8, 16, 32]) # Strides podem precisar de ajuste
+                detections = self._parse_predictions(predictions, [8, 16, 32]) # Strides may need adjustment
 
                 for i in range(len(images)):
                     if count >= num_images:
                         break
                     
-                    # Converter imagem de tensor para numpy (BGR)
+                    # Convert image from tensor to NumPy (BGR)
                     img = images[i].permute(1, 2, 0).cpu().numpy() * 255
                     img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2BGR)
                     
-                    # Desenhar Ground Truth (em vermelho)
+                    # Draw ground truth (in red)
                     for box, label in zip(targets[i]['boxes'], targets[i]['labels']):
                         x1, y1, x2, y2 = map(int, box)
                         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
                         cv2.putText(img, class_names[label], (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                    # Desenhar Predições (em verde)
+                    # Draw predictions (in green)
                     for box, score, label in zip(detections[i]['boxes'], detections[i]['scores'], detections[i]['labels']):
-                        if score > 0.3: # Limiar de confiança para visualização
+                        if score > 0.3: # Confidence threshold for visualization
                            x1, y1, x2, y2 = map(int, box)
                            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                            label_text = f"{class_names[label]}: {score:.2f}"
@@ -337,11 +310,10 @@ class SmallObjectEvaluator:
                     save_path = os.path.join(save_dir, f"sample_{count}.jpg")
                     cv2.imwrite(save_path, img)
                     count += 1
-        print(f"{count} imagens de exemplo salvas em: {save_dir}")
+    print(f"{count} sample images saved at: {save_dir}")
 
 
 def run_complete_evaluation():
-    """COMPLETE EVALUATION FUNCTION - THE ONLY ONE WE NEED"""
     import os
     import sys
     import yaml
@@ -356,7 +328,7 @@ def run_complete_evaluation():
     
     from src.models.model import SmallObjectYOLO
     
-    print("RUNNING COMPLETE EVALUATION")
+    print("Eval running")
     print("="*60)
     
     # Configuration

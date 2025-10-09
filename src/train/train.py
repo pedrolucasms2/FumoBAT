@@ -11,7 +11,6 @@ import argparse
 import torch.nn.functional as F
 from torchvision.ops import nms
 
-# Adicionar o diretório raiz ao path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import torch
@@ -20,7 +19,6 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 
-# Imports relativos corrigidos
 try:
     from src.models.model import SmallObjectYOLO
     from src.train.losses import SmallObjectYOLOLoss as SmallObjectLoss
@@ -28,7 +26,7 @@ try:
     from src.data.transforms import SmallObjectAugmentationPipeline
     from src.train.losses import bbox_iou
 except ImportError:
-    # Fallback para imports diretos
+    # Fallback to direct imports
     import sys
     import os
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,14 +39,12 @@ except ImportError:
     from src.data.transforms import SmallObjectAugmentationPipeline
 
 ANCHORS = torch.tensor([
-    [[10, 13], [16, 30], [33, 23]],      # Para P3 (stride 8)
-    [[30, 61], [62, 45], [59, 119]],     # Para P4 (stride 16)
-    [[116, 90], [156, 198], [373, 326]]  # Para P5 (stride 32)
+    [[10, 13], [16, 30], [33, 23]],      # For P3 (stride 8)
+    [[30, 61], [62, 45], [59, 119]],     # For P4 (stride 16)
+    [[116, 90], [156, 198], [373, 326]]  # For P5 (stride 32)
 ], dtype=torch.float32)
 
-# (As classes EarlyStopping, WarmupCosineScheduler, etc. continuam aqui, sem alterações)
 class EarlyStopping:
-    """Early stopping to prevent overfitting"""
     def __init__(self, patience=10, min_delta=0.001):
         self.patience = patience
         self.min_delta = min_delta
@@ -65,7 +61,6 @@ class EarlyStopping:
             return self.counter >= self.patience
 
 class WarmupCosineScheduler:
-    """Warmup + Cosine Annealing LR Scheduler"""
     def __init__(self, optimizer, warmup_epochs, total_epochs, base_lr, min_lr=1e-6):
         self.optimizer = optimizer
         self.warmup_epochs = warmup_epochs
@@ -85,7 +80,6 @@ class WarmupCosineScheduler:
         return lr
 
 def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, training=True):
-    """Builds an enhanced dataloader for small object detection."""
     with open(data_yaml, 'r') as f:
         data = yaml.safe_load(f)
 
@@ -94,16 +88,10 @@ def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, traini
     
     split = 'train' if training else 'val'
     
-    # --- LÓGICA FINAL E ROBUSTA ---
-    # Lê o caminho relativo das imagens diretamente do data.yaml
-    # Ex: data['train'] é 'images/train'
     img_dir = os.path.join(path, data[split])
     
-    # Deriva o caminho dos labels a partir do caminho das imagens
-    # Isso assume que a estrutura é a mesma, trocando 'images' por 'labels'
     label_dir = img_dir.replace('images', 'labels')
 
-    # O resto da função continua igual...
     transforms = SmallObjectAugmentationPipeline(img_size=img_size, training=training)
     
     dataset = SmallObjectDataset(img_dir=img_dir, label_dir=label_dir, transforms=transforms)
@@ -120,12 +108,10 @@ def build_enhanced_dataloader(data_yaml, img_size, batch_size, workers=4, traini
     return dataloader, nc
 
 def calculate_metrics(predictions, targets, iou_threshold=0.5):
-    """Calculates precision, recall, and F1 score."""
     true_positives = 0
     num_preds = 0
     total_targets = 0
 
-    # Iterate over each image in the batch
     for i, (preds, target) in enumerate(zip(predictions, targets)):
         target_boxes = target['boxes']
         target_labels = target['labels']
@@ -166,14 +152,11 @@ def calculate_metrics(predictions, targets, iou_threshold=0.5):
 
             # Find the best match
             best_overlap, best_idx = overlaps.max(0)
-
-            # 🚨 CORREÇÃO AQUI 🚨
-            # Use .item() to get scalar values for the condition
-            # And check if the best matching GT box hasn't been detected yet
+        
             original_target_idx = matching_target_indices[best_idx]
             if best_overlap.item() > iou_threshold and not detected[original_target_idx]:
                 true_positives += 1
-                detected[original_target_idx] = True # Mark this GT box as detected
+                detected[original_target_idx] = True 
 
     # Calculate metrics
     fp = num_preds - true_positives
@@ -186,7 +169,6 @@ def calculate_metrics(predictions, targets, iou_threshold=0.5):
     return {'precision': precision, 'recall': recall, 'f1': f1}
 
 def setup_logging(save_dir):
-    """Configura o logging para salvar em arquivo e no console"""
     log_file = os.path.join(save_dir, 'train.log')
     logging.basicConfig(
         level=logging.INFO,
@@ -199,64 +181,53 @@ def setup_logging(save_dir):
     return logging.getLogger()
 
 def postprocess_and_nms(outputs, strides, conf_threshold=0.25, iou_threshold=0.45):
-    """
-    Decodifica a saída do modelo e aplica NMS, de forma consistente com SmallObjectYOLOLoss.
-    """
     all_preds_per_image = [[] for _ in range(outputs[0].shape[0])]
     
     for i, (pred, stride) in enumerate(zip(outputs, strides)):
         B, C, H, W = pred.shape
         device = pred.device
         
-        # Seleciona as âncoras para a escala atual e move para o dispositivo
+        # Select anchors for the current scale and move them to the device
         current_anchors = ANCHORS[i].to(device)
 
-        # Reformatar a saída do modelo
+        # Reshape model output
         num_anchors = 3
         num_classes = C // num_anchors - 5
         pred = pred.view(B, num_anchors, -1, H, W).permute(0, 1, 3, 4, 2).contiguous()
         
-        # Criar a grade de células para adicionar os offsets
+        # Create the cell grid to add offsets
         grid_x, grid_y = torch.meshgrid(torch.arange(W, device=device), torch.arange(H, device=device), indexing='xy')
         grid_xy = torch.stack((grid_x, grid_y), 2).view(1, 1, H, W, 2)
         
-        # --- DECODIFICAÇÃO ---
-        # A lógica aqui agora espelha a lógica inversa da sua função de perda.
-        
-        # Decodificar coordenadas do centro (x, y)
-        # Lógica padrão do YOLOv5/v7, que é consistente com o cálculo de gi, gj em build_targets
         xy = (torch.sigmoid(pred[..., 0:2]) * 2 - 0.5 + grid_xy) * stride
         
-        # Decodificar largura e altura (w, h)
-        # 🚨 ESTA É A MUDANÇA CRÍTICA 🚨
-        # Usamos a transformação exponencial com as âncoras, exatamente como em SmallObjectYOLOLoss
         anchor_grid = current_anchors.view(1, num_anchors, 1, 1, 2)
-        wh = (torch.exp(pred[..., 2:4]) * anchor_grid) * stride # A loss usa torch.exp(), então aqui usamos o inverso
+        wh = (torch.exp(pred[..., 2:4]) * anchor_grid) * stride  
         
-        # Obter confiança de objeto e probabilidades de classe
+        # Obtain object confidence and class probabilities
         pred_conf = torch.sigmoid(pred[..., 4])
         pred_cls = torch.sigmoid(pred[..., 5:])
         
-        # Combinar todas as predições decodificadas
+        # Combine all decoded predictions
         output = torch.cat((xy, wh, pred_conf.unsqueeze(-1), pred_cls), -1)
         output = output.view(B, -1, 5 + num_classes) # [Batch, N_Boxes, 5+NC]
 
-        # Processar cada imagem do batch separadamente para o NMS
+        # Process each image in the batch separately for NMS
         for b in range(B):
             img_preds = output[b]
             
-            # Filtrar predições com baixa confiança
+            # Filter predictions with low confidence
             conf_mask = img_preds[:, 4] >= conf_threshold
             img_preds = img_preds[conf_mask]
             
             if not img_preds.shape[0]:
                 continue
             
-            # Obter a classe com maior pontuação e a pontuação final
+            # Get the highest scoring class and compute the final confidence
             class_conf, class_pred = torch.max(img_preds[:, 5:], 1, keepdim=True)
             final_conf = img_preds[:, 4].unsqueeze(1) * class_conf
             
-            # Converter caixas de [cx, cy, w, h] para [x1, y1, x2, y2] para o NMS
+            # Convert boxes from [cx, cy, w, h] to [x1, y1, x2, y2] for NMS
             box_xywh = img_preds[:, :4]
             box_xyxy = torch.empty_like(box_xywh)
             box_xyxy[:, 0] = box_xywh[:, 0] - box_xywh[:, 2] / 2  # x1
@@ -264,10 +235,10 @@ def postprocess_and_nms(outputs, strides, conf_threshold=0.25, iou_threshold=0.4
             box_xyxy[:, 2] = box_xywh[:, 0] + box_xywh[:, 2] / 2  # x2
             box_xyxy[:, 3] = box_xywh[:, 1] + box_xywh[:, 3] / 2  # y2
             
-            # Formato final para NMS: [x1, y1, x2, y2, conf, class]
+            # Final format for NMS: [x1, y1, x2, y2, conf, class]
             detections = torch.cat((box_xyxy, final_conf, class_pred.float()), 1)
             
-            # Aplicar NMS por classe
+            # Apply NMS per class
             unique_classes = detections[:, 5].unique()
             nms_detections = []
             for cls in unique_classes:
@@ -279,7 +250,7 @@ def postprocess_and_nms(outputs, strides, conf_threshold=0.25, iou_threshold=0.4
             if nms_detections:
                 all_preds_per_image[b].append(torch.cat(nms_detections))
 
-    # Concatenar predições de todas as escalas para cada imagem
+    # Concatenate predictions from all scales for each image
     final_results = [torch.cat(preds) if preds else torch.empty(0, 6, device=outputs[0].device) for preds in all_preds_per_image]
     
     return final_results
@@ -295,7 +266,6 @@ def enhanced_train(
     weights,
     save_dir
 ):
-    """FUNÇÃO DE TREINAMENTO CONSOLIDADA E APRIMORADA"""
     # Setup
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(save_dir, exist_ok=True)
@@ -303,7 +273,7 @@ def enhanced_train(
     logger.info(f"Using device: {device}")
     logger.info(f"Saving results to: {save_dir}")
 
-    # Salvar configurações para reprodutibilidade
+    # Save configurations for reproducibility
     shutil.copy(data_yaml, os.path.join(save_dir, 'data.yaml'))
     shutil.copy(model_yaml, os.path.join(save_dir, 'model.yaml'))
 
@@ -320,13 +290,13 @@ def enhanced_train(
 
     # Model
     logger.info("Initializing model...")
-    # Usando a nova arquitetura com Módulo de Relação
+    # Using the new architecture with the Relation Module
     model = SmallObjectYOLO(nc=nc, ch=model_cfg.get('channels', [64, 128, 256, 384]))
     
     # if weights and os.path.exists(weights):
     #     logger.info(f"Loading weights from {weights}")
     #     checkpoint = torch.load(weights, map_location=device)
-    #     # Ajuste para carregar pesos mesmo com a nova arquitetura
+    #     # Adjust state dict filtering to load weights with the new architecture
     #     model_dict = model.state_dict()
     #     pretrained_dict = {k: v for k, v in checkpoint.items() if k in model_dict and v.shape == model_dict[k].shape}
     #     model_dict.update(pretrained_dict)
@@ -374,8 +344,7 @@ def enhanced_train(
                 optimizer.step()
             
             epoch_loss = epoch_loss + loss.item()
-        
-        # Validation
+                
         # Validation
         model.eval()
         val_loss = 0.0
@@ -399,14 +368,13 @@ def enhanced_train(
                 for key in val_metrics_sum:
                     val_metrics_sum[key] += metrics[key]
 
-        
         # Average metrics
         val_loss /= len(val_loader)
         val_metrics = {key: val / len(val_loader) for key, val in val_metrics_sum.items()}
 
         logger.info(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | Train Loss: {epoch_loss:.4f} | Val Loss: {val_loss:.4f} | Precision: {val_metrics['precision']:.4f}, Recall: {val_metrics['recall']:.4f}")
 
-                # Salvar histórico
+        # Save training history
         epoch_results = {
             'epoch': epoch+1, 
             'lr': float(current_lr), 
@@ -420,7 +388,7 @@ def enhanced_train(
         with open(os.path.join(save_dir, 'training_history.json'), 'w') as f:
             json.dump(history, f, indent=4)
 
-        # Salvar melhor modelo
+        # Save best model checkpoint
         if val_loss < best_loss:
             best_loss = val_loss
             torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
@@ -438,9 +406,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Enhanced Training for Small Object Detection')
     parser.add_argument('--img-size', type=int, default=1024, help='Image size for training')
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size for training (A100 can handle this with 1024px)')
-    # 🔧 ALTERAÇÃO B: Aumentar epochs de 150 para 200
     parser.add_argument('--epochs', type=int, default=200, help='Total number of epochs')
-    # 🔧 ALTERAÇÃO A: Aumentar learning rate de 5e-4 para 1e-3
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--data', type=str, default='configs/data.yaml', help='Path to data.yaml')
     parser.add_argument('--model', type=str, default='configs/enhanced_model.yaml', help='Path to model.yaml')

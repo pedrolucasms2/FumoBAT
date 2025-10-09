@@ -8,7 +8,6 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 class SmallObjectMixUp:
-    """MixUp augmentation specifically for small objects"""
     def __init__(self, alpha=0.2, prob=0.5):
         self.alpha = alpha
         self.prob = prob
@@ -30,7 +29,6 @@ class SmallObjectMixUp:
         return mixed_image.astype(np.uint8), mixed_boxes
 
 class SmallObjectMosaic:
-    """Mosaic augmentation optimized for small objects"""
     def __init__(self, size=640, prob=0.8):
         self.size = size
         self.prob = prob
@@ -63,7 +61,6 @@ class SmallObjectMosaic:
         return mosaic_img, mosaic_boxes
 
 class SmallObjectCopyPaste:
-    """Copy-paste augmentation for small objects"""
     def __init__(self, prob=0.3, max_objects=5):
         self.prob = prob
         self.max_objects = max_objects
@@ -97,12 +94,10 @@ class SmallObjectCopyPaste:
         return img_copy, new_boxes
 
 def get_small_object_transforms(img_size=640, training=True):
-    """Get optimized transforms for small object detection"""
     bbox_params = A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1)
 
     if training:
         return A.Compose([
-            # --- THIS IS THE CORRECTED LINE ---
             A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0), ratio=(0.9, 1.1), p=0.5),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.1),
@@ -125,14 +120,13 @@ def get_small_object_transforms(img_size=640, training=True):
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ], bbox_params=bbox_params)
-    else: # Validation/Testing
+    else: 
         return A.Compose([
             A.Resize(height=img_size, width=img_size),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ], bbox_params=bbox_params)
 class MultiScaleTransforms:
-    """Multi-scale training class, which can be pickled for multiprocessing."""
     def __init__(self, scales=[480, 512, 544, 576, 608, 640, 672, 704, 736], target_size=640):
         self.scales = scales
         self.target_size = target_size
@@ -150,29 +144,21 @@ class MultiScaleTransforms:
 
         return transforms(image=image, bboxes=bboxes, class_labels=class_labels)
 class SmallObjectAugmentationPipeline:
-    """
-    Pipeline de augmentation AGRESSIVO para combater overfitting em datasets pequenos.
-    """
     def __init__(self, img_size=1024, training=True):
         self.img_size = img_size
         self.training = training
         
-        if training:
-            # --- Pipeline de Treinamento Agressivo Corrigido ---
-            self.transforms = A.Compose([
-                # Transformações espaciais
+        if training:            
+            self.transforms = A.Compose([                
                 A.RandomResizedCrop(size=(img_size, img_size), scale=(0.75, 1.0), p=0.8),
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
-                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.7, border_mode=cv2.BORDER_CONSTANT),
-
-                # Transformações de cor e brilho
+                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.7, border_mode=cv2.BORDER_CONSTANT),                
                 A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1, p=0.8),
                 A.ToGray(p=0.1),
                 A.RandomGamma(p=0.2),
-
-                # Adição de "ruído"
+                
                 A.OneOf([
                     A.GaussNoise(p=0.5),
                     A.ISONoise(p=0.5),
@@ -184,18 +170,12 @@ class SmallObjectAugmentationPipeline:
                     A.Blur(blur_limit=3, p=0.5),
                 ], p=0.4),
                 
-                # 
-                # 🔧 GARANTIA DE TAMANHO ADICIONADA AQUI 🔧
-                # Esta linha força todas as imagens a terem o tamanho final correto, 
-                # mesmo que o RandomResizedCrop seja pulado.
                 A.Resize(height=img_size, width=img_size),
 
-                # Normalizar e converter para Tensor (sempre no final)
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels'], min_visibility=0.1))
-        else:
-            # --- Pipeline de Validação (sempre esteve correto) ---
+        else:            
             self.transforms = A.Compose([
                 A.Resize(height=img_size, width=img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -215,32 +195,26 @@ class SmallObjectAugmentationPipeline:
         
         class_labels = labels.tolist() if isinstance(labels, np.ndarray) else list(labels)
         
-        try:
-            # Aplica o pipeline de transformações completo
+        try:            
             result = self.transforms(image=image, bboxes=boxes, class_labels=class_labels)
 
-            # Garante que os tensores retornados tenham o tipo de dado correto
+            # Ensure returned tensors have the expected data types
             return {
                 "image": result["image"], 
                 "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32), 
                 "labels": torch.as_tensor(result["class_labels"], dtype=torch.long)
             }
-        except Exception as e:
-            # 
-            # 🔧 CORREÇÃO APLICADA AQUI 🔧
-            # Se a augmentation falhar (ex: remover todos os bboxes), 
-            # ainda assim redimensionamos a imagem original antes de retorná-la.
-            # 
-            print(f"Aviso: Augmentation falhou para uma imagem ({e}). Usando imagem original redimensionada.")
+        except Exception as e:             
+            print(f"WARNING: Augmentation failed for image ({e}). Using original resized image")
             
-            # Cria um pipeline de fallback simples
+            # Build a basic fallback pipeline
             fallback_transforms = A.Compose([
                 A.Resize(height=self.img_size, width=self.img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
             
-            # Aplica o fallback e retorna os dados originais, mas com o tamanho correto
+            # Apply the fallback and return the original data resized properly
             result = fallback_transforms(image=image, bboxes=boxes, class_labels=class_labels)
 
             return {

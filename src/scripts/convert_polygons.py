@@ -4,19 +4,15 @@ from glob import glob
 import shutil
 
 def convert_polygon_to_bbox(polygon_coords):
-    """
-    Converte uma lista de coordenadas de polígono [x1, y1, x2, y2, ...]
-    para o formato de bounding box YOLO [x_center, y_center, width, height].
-    """
-    # Separa as coordenadas x e y
+    # Split x and y coordinates
     xs = np.array(polygon_coords[0::2])
     ys = np.array(polygon_coords[1::2])
 
-    # Encontra o min e max para criar a bounding box
+    # Find min and max to build the bounding box
     x_min, x_max = np.min(xs), np.max(xs)
     y_min, y_max = np.min(ys), np.max(ys)
 
-    # Converte de (x_min, y_min, x_max, y_max) para YOLO (x_center, y_center, w, h)
+    # Convert from (x_min, y_min, x_max, y_max) to YOLO (x_center, y_center, w, h)
     width = x_max - x_min
     height = y_max - y_min
     x_center = x_min + (width / 2)
@@ -25,21 +21,17 @@ def convert_polygon_to_bbox(polygon_coords):
     return [x_center, y_center, width, height]
 
 def process_label_files(input_dir, output_dir):
-    """
-    Processa todos os arquivos .txt em um diretório, convertendo polígonos
-    para bounding boxes e salvando no diretório de saída.
-    """
-    # Cria o diretório de saída se não existir
+    # Create the output directory if it does not exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Encontra todos os arquivos de label no diretório de entrada
+    # Find all label files in the input directory
     label_files = glob(os.path.join(input_dir, '*.txt'))
     
     if not label_files:
-        print(f"Nenhum arquivo .txt encontrado em: {input_dir}")
+        print(f"No .txt files found in: {input_dir}")
         return
 
-    print(f"Encontrados {len(label_files)} arquivos em {input_dir}. Convertendo...")
+    print(f"Found {len(label_files)} files in {input_dir}. Converting...")
 
     for file_path in label_files:
         new_lines = []
@@ -52,51 +44,51 @@ def process_label_files(input_dir, output_dir):
                 class_id = parts[0]
                 polygon_coords = [float(p) for p in parts[1:]]
                 
-                # Garante que temos um número par de coordenadas
+                # Ensure there is an even number of coordinates
                 if len(polygon_coords) % 2 != 0:
-                    print(f"AVISO: Número ímpar de coordenadas no arquivo {os.path.basename(file_path)}. Pulando linha.")
+                    print(f"WARNING: Odd number of coordinates in file {os.path.basename(file_path)}. Skipping line.")
                     continue
 
-                # Converte para bounding box
+                # Convert to bounding box
                 bbox_coords = convert_polygon_to_bbox(polygon_coords)
 
-                # Formata a nova linha
+                # Format the new line
                 new_line = f"{class_id} {bbox_coords[0]} {bbox_coords[1]} {bbox_coords[2]} {bbox_coords[3]}"
                 new_lines.append(new_line)
 
-        # Escreve o novo arquivo de label no diretório de saída
+        # Write the new label file to the output directory
         output_file_path = os.path.join(output_dir, os.path.basename(file_path))
         with open(output_file_path, 'w') as f:
             f.write('\n'.join(new_lines))
 
-    print(f"Conversão concluída! Arquivos salvos em: {output_dir}")
+    print(f"Conversion completed! Files saved to: {output_dir}")
 
 
 # /src/scripts/convert_polygons.py
 
 if __name__ == '__main__':
-    # --- CAMINHOS ADAPTADOS PARA A ESTRUTURA images/train, labels/train ---
+    # --- PATHS ADAPTED FOR images/train, labels/train STRUCTURE ---
     
     base_dir = os.path.join('datasets', 'my_dataset')
     
-    # Diretórios de entrada (onde estão os polígonos)
+    # Input directories (where the polygons live)
     train_labels_in = os.path.join(base_dir, 'labels', 'train')
     val_labels_in = os.path.join(base_dir, 'labels', 'val')
     
-    # Diretórios de saída (onde as novas bounding boxes serão salvas)
+    # Output directories (where the new bounding boxes will be saved)
     train_labels_out = os.path.join(base_dir, 'labels', 'train_bbox')
     val_labels_out = os.path.join(base_dir, 'labels', 'val_bbox')
     
-    # --- EXECUÇÃO DA CONVERSÃO ---
+    # --- RUN CONVERSION ---
     
-    # Processa os arquivos de treino
+    # Process training files
     process_label_files(train_labels_in, train_labels_out)
     
-    # Processa os arquivos de validação
+    # Process validation files
     process_label_files(val_labels_in, val_labels_out)
     
-    print("\nLembrete: O próximo passo é renomear as pastas 'train' e 'val' originais")
-    print("e depois renomear as novas pastas 'train_bbox' e 'val_bbox'.")
-    print("\nExemplo para a pasta de treino:")
-    print(f"1. Renomeie '{train_labels_in}' para '{train_labels_in}_polygon_backup'")
-    print(f"2. Renomeie '{train_labels_out}' para '{train_labels_in}'")
+    print("\nReminder: The next step is to rename the original 'train' and 'val' folders")
+    print("and then rename the new 'train_bbox' and 'val_bbox' folders.")
+    print("\nExample for the training folder:")
+    print(f"1. Rename '{train_labels_in}' to '{train_labels_in}_polygon_backup'")
+    print(f"2. Rename '{train_labels_out}' to '{train_labels_in}'")

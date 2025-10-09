@@ -167,12 +167,6 @@ class FRM(nn.Module):
         return delta * skip + (1 - delta) * up_aligned
 
 class EfficientObjectRelationModule(nn.Module):
-    """
-    Substitui ObjectRelationModule por versão MUITO mais eficiente
-    - Remove sampling aleatório problemático
-    - Usa attention linear ao invés de quadrática
-    - Mantém performance para objetos pequenos
-    """
     def __init__(self, c_in, reduction=4, num_scales=4):
         super().__init__()
         self.c_in = c_in
@@ -214,22 +208,18 @@ class EfficientObjectRelationModule(nn.Module):
         B, C, H, W = x.shape
         identity = x
         
-        # === CHANNEL RELATIONS ===
-        # Global channel attention - O(C) complexity
+        # Global channel attention 
         channel_weights = self.channel_attention(x)
         x_channel = x * channel_weights
         
-        # === SPATIAL RELATIONS ===
-        # Efficient spatial modeling through separable convolutions
+        # Spatial modeling through separable convolutions
         x_spatial = self.spatial_conv(x_channel)
         
-        # === MULTI-SCALE CONTEXT ===
-        # Capture relations at different scales - LINEAR complexity
+        # Multi-scale context
         multi_scale_features = []
         for pool in self.scale_pools:
             # Pool to different scales
-            pooled = pool(x_spatial)  # [B, C, scale, scale]
-            
+            pooled = pool(x_spatial)  # [B, C, scale, scale]            
             # Upsample back to original size
             upsampled = F.interpolate(pooled, size=(H, W), 
                                     mode='bilinear', align_corners=False)
@@ -238,26 +228,19 @@ class EfficientObjectRelationModule(nn.Module):
         # Combine multi-scale features
         multi_scale_context = sum(multi_scale_features) / len(multi_scale_features)
         
-        # === POSITION ENCODING ===
         # Add learnable position information
         x_with_pos = x_spatial + self.position_embed
         
-        # === FEATURE FUSION ===
         # Combine spatial and multi-scale features
         combined = torch.cat([x_with_pos, multi_scale_context], dim=1)
         output = self.output_proj(combined)
         
-        # === RESIDUAL CONNECTION ===
         # Weighted residual connection
         output = self.norm(output + identity * 0.2)
         
         return output
 
 class LinearAttentionRelation(nn.Module):
-    """
-    Alternative: Linear attention para relações espaciais
-    Complexidade O(HW) ao invés de O(H²W²)
-    """
     def __init__(self, c_in, heads=8):
         super().__init__()
         self.heads = heads
@@ -287,10 +270,8 @@ class LinearAttentionRelation(nn.Module):
         # Linear attention trick: normalize K first
         k = F.softmax(k, dim=-2)  # Normalize over spatial dimension
         
-        # Compute context: O(d²) instead of O(n²)
         context = torch.matmul(k.transpose(-1, -2), v.transpose(-1, -2))  # [B, heads, HW, HW] -> [B, heads, d, d]
         
-        # Apply context to queries: O(nd) instead of O(n²)
         out = torch.matmul(q.transpose(-1, -2), context).transpose(-1, -2)  # [B, heads, d, HW]
         
         # Reshape and project
@@ -301,10 +282,8 @@ class LinearAttentionRelation(nn.Module):
         return self.norm(out + identity)
 
 class ObjectRelationModule(nn.Module):
-    """Versão eficiente - sem sampling problemático"""
     def __init__(self, c_in, n_relations=16, d_k=64, d_g=64):
         super().__init__()
-        # Usar a implementação eficiente
         self.efficient_relation = EfficientObjectRelationModule(c_in, reduction=4)
         
     def forward(self, x):

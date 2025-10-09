@@ -7,7 +7,6 @@ from torch.utils.data import Dataset
 from typing import List, Dict, Any
 
 def clamp_bbox(bbox):
-    """Clamps bounding box coordinates to the range [0.0, 1.0]."""
     x_center, y_center, w, h = bbox
     # Convert to x_min, y_min, x_max, y_max
     x_min = x_center - w / 2
@@ -30,8 +29,6 @@ def clamp_bbox(bbox):
     return [new_x_center, new_y_center, new_w, new_h]
 
 class SmallObjectDataset(Dataset):
-    """Dataset for small object detection."""
-
     def __init__(self, img_dir: str, label_dir: str, transforms=None):
         self.img_dir = img_dir
         self.label_dir = label_dir
@@ -61,8 +58,7 @@ class SmallObjectDataset(Dataset):
                         parts = line.strip().split()
                         if len(parts) >= 5:
                             class_id = int(parts[0])
-                            coords = list(map(float, parts[1:5]))
-                            # --- CORRECTION APPLIED HERE ---
+                            coords = list(map(float, parts[1:5]))                            
                             clamped_coords = clamp_bbox(coords)
                             boxes.append(clamped_coords)
                             labels.append(class_id)
@@ -97,7 +93,6 @@ class SmallObjectDataset(Dataset):
         }
 
 def collate_fn(batch):
-    """Custom collate function."""
     images = [item['image'] for item in batch]
     boxes = [item['boxes'].detach().clone() if torch.is_tensor(item['boxes']) 
          else torch.tensor(item['boxes']) for item in batch]
